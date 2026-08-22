@@ -1,8 +1,8 @@
 // JARVIS Trade Agent — backend scanner
 //
-// Runs on a GitHub Actions schedule. Cheap, free order-book/volume checks happen
-// every run; Anthropic (with web search) is only called when a coin actually trips
-// a threshold, or a safety-net interval has elapsed with no trigger.
+// Cheap, free order-book/volume checks happen every run; Anthropic (with web search) is only
+// called when a coin actually trips a technical threshold. There is no timer-based fallback —
+// if nothing trips, nothing gets called, no matter how long it's been.
 //
 // This script NEVER touches a Hyperliquid private key and NEVER places trades.
 // It only researches and alerts (Telegram + a JSON feed the dashboard reads).
@@ -381,7 +381,6 @@ async function main(){
   const feed = readJson(FEED_PATH, { recommendations: [] });
 
   const minGapMs = INTERVAL_MIN * 60000;
-  const maxGapMs = minGapMs * 4;
   const sinceLastScan = Date.now() - (state.lastFullScanTime || 0);
 
   if(sinceLastScan < minGapMs){
@@ -393,17 +392,12 @@ async function main(){
   const signals = await loadSignals(allCoins);
   const tripped = findTrippedCoins(signals);
 
-  let scanCoins = null;
-  if(tripped.length){
-    console.log('Signal tripped on: ' + tripped.join(', '));
-    scanCoins = tripped;
-  } else if(sinceLastScan >= maxGapMs){
-    console.log('No signal tripped, running scheduled safety-net scan across full set.');
-    scanCoins = allCoins;
-  } else {
-    console.log('No signal tripped, within safety-net window. Nothing to do.');
+  if(!tripped.length){
+    console.log('No signal tripped. Not calling Anthropic — nothing to do this run.');
     return;
   }
+  console.log('Signal tripped on: ' + tripped.join(', '));
+  const scanCoins = tripped;
 
   const subsetSignals = {};
   scanCoins.forEach(c => { if(signals[c]) subsetSignals[c] = signals[c]; });
