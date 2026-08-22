@@ -40,6 +40,7 @@ jobs:
           HL_EXEC_NETWORK: ${{ vars.HL_EXEC_NETWORK }}
           MAX_POSITION_PCT: ${{ vars.MAX_POSITION_PCT }}
           MAX_LEVERAGE: ${{ vars.MAX_LEVERAGE }}
+          DEFAULT_TAKE_PROFIT_PCT: ${{ vars.DEFAULT_TAKE_PROFIT_PCT }}
           EXECUTION_WINDOW_MIN: ${{ vars.EXECUTION_WINDOW_MIN }}
         run: node agent/poll_telegram.js
 
