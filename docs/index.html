@@ -910,15 +910,23 @@
     el.innerHTML = recommendations.map((r, i) => {
       const isLong = r.direction === 'long';
       const sourceTag = r.source === 'backend' ? '<span class="conviction low" style="margin-left:4px;">via scan</span>' : '';
+      const status = r.status || 'pending';
+      const statusBadge = {
+        executed: '<span class="conviction high" style="margin-left:4px;">executed via Telegram</span>',
+        denied: '<span class="conviction low" style="margin-left:4px;">denied via Telegram</span>',
+        expired: '<span class="conviction low" style="margin-left:4px;">expired</span>',
+        failed: '<span class="conviction medium" style="margin-left:4px;">execution failed</span>',
+        processing: '<span class="conviction medium" style="margin-left:4px;">processing…</span>'
+      }[status] || '';
+      const actions = status === 'pending'
+        ? '<div class="rec-actions"><button class="rec-review" data-i="'+i+'">Review &amp; confirm</button><button class="rec-dismiss" data-i="'+i+'">Dismiss</button></div>'
+        : '<div class="rec-actions"><button class="rec-dismiss" data-i="'+i+'">Remove from list</button></div>';
       return '<div class="rec-card">'
         + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
-        + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+sourceTag+'</span></div>'
+        + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+sourceTag+statusBadge+'</span></div>'
         + '<div class="rec-catalyst">'+ (r.catalyst||'') +'</div>'
         + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+'</div>'
-        + '<div class="rec-actions">'
-        + '<button class="rec-review" data-i="'+i+'">Review &amp; confirm</button>'
-        + '<button class="rec-dismiss" data-i="'+i+'">Dismiss</button>'
-        + '</div></div>';
+        + actions + '</div>';
     }).join('');
     el.querySelectorAll('.rec-review').forEach(btn => btn.addEventListener('click', ()=> openConfirmModal(recommendations[parseInt(btn.dataset.i,10)])));
     el.querySelectorAll('.rec-dismiss').forEach(btn => btn.addEventListener('click', ()=>{
@@ -939,14 +947,24 @@
       if(!res.ok) return;
       const feed = await res.json();
       const incoming = (feed.recommendations || []).filter(r => r.id && !dismissedIds.includes(r.id));
-      const existingIds = new Set(recommendations.filter(r=>r.id).map(r=>r.id));
-      const fresh = incoming.filter(r => !existingIds.has(r.id));
-      if(fresh.length){
-        recommendations = fresh.concat(recommendations).slice(0, 15);
-        renderRecommendations();
-        log('Backend scan found ' + fresh.length + ' new recommendation(s)', 'ok');
-        notifyNewRecommendations(fresh);
-        document.getElementById('agentMeta').textContent = 'Backend scan synced: ' + new Date().toLocaleTimeString() + ' — ' + fresh.length + ' new idea(s).';
+      const byId = {};
+      recommendations.forEach(r => { if(r.id) byId[r.id] = r; });
+      let freshCount = 0;
+      incoming.forEach(r => {
+        if(byId[r.id]){
+          // sync status changes (e.g. confirmed/denied on Telegram) into what's already shown
+          Object.assign(byId[r.id], r);
+        } else {
+          recommendations.unshift(r);
+          freshCount++;
+        }
+      });
+      recommendations = recommendations.slice(0, 15);
+      renderRecommendations();
+      if(freshCount){
+        log('Backend scan found ' + freshCount + ' new recommendation(s)', 'ok');
+        notifyNewRecommendations(incoming.filter(r => !byId[r.id]));
+        document.getElementById('agentMeta').textContent = 'Backend scan synced: ' + new Date().toLocaleTimeString() + ' — ' + freshCount + ' new idea(s).';
       }
     }catch(e){ /* file may not exist yet on a fresh Pages deploy, or running from a local file:// — ignore */ }
   }
@@ -969,6 +987,7 @@
     document.getElementById('confSize').value = size ? size.toFixed(5) : '';
 
     document.getElementById('confirmOverlay').dataset.coin = rec.coin;
+    document.getElementById('confirmOverlay').dataset.recId = rec.id || '';
     updateRiskCheck();
     document.getElementById('confirmOverlay').classList.add('open');
   }
@@ -1006,6 +1025,20 @@
     try{
       await ensureSdk();
       const coin = document.getElementById('confirmOverlay').dataset.coin;
+      const recId = document.getElementById('confirmOverlay').dataset.recId;
+      if(recId){
+        try{
+          const res = await fetch(BACKEND_FEED_URL, { cache:'no-store' });
+          const feed = await res.json();
+          const latest = (feed.recommendations || []).find(r => r.id === recId);
+          if(latest && latest.status && latest.status !== 'pending'){
+            log('This recommendation was already ' + latest.status + ' (via Telegram) — not placing a duplicate order.', 'err');
+            document.getElementById('confirmOverlay').classList.remove('open');
+            pollBackendFeed();
+            return;
+          }
+        }catch(e){ /* feed unreachable, proceed on local state */ }
+      }
       const isBuy = document.getElementById('confDirection').value === 'buy';
       const entryType = document.getElementById('confEntryType').value;
       const size = parseFloat(document.getElementById('confSize').value);
