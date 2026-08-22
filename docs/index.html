@@ -281,13 +281,17 @@
           <label>Size (coin units)</label>
           <input type="number" id="sizeInput" placeholder="0.00" step="any">
         </div>
-        <div class="field checkbox" style="grid-column:span 2;">
-          <input type="checkbox" id="reduceOnly">
-          <label for="reduceOnly">Reduce only</label>
+        <div class="field" style="grid-column:span 2;">
+          <label>Stop-loss (optional, USD)</label>
+          <input type="number" id="ticketStopLoss" placeholder="0.00" step="any">
         </div>
         <div class="field" style="grid-column:span 2;">
           <label>Take-profit (optional, USD)</label>
           <input type="number" id="ticketTakeProfit" placeholder="0.00" step="any">
+        </div>
+        <div class="field checkbox" style="grid-column:span 4;">
+          <input type="checkbox" id="reduceOnly">
+          <label for="reduceOnly">Reduce only</label>
         </div>
         <button class="submit-btn buy" id="submitOrderBtn">Buy / Long BTC</button>
       </div>
@@ -397,7 +401,7 @@
     </div>
     <div class="risk-grid">
       <div class="field">
-        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Min. minutes between full scans</label>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Min. minutes between triggered scans</label>
         <input type="number" id="autoScanIntervalInput" placeholder="30" step="1">
       </div>
       <div class="field">
@@ -410,7 +414,7 @@
       </div>
     </div>
     <div class="warn-box" style="margin-top:10px;">
-      To stay cost-effective, JARVIS doesn't call the research model on a dumb timer. It checks free order-book and volume data every couple of minutes; a full research scan (with web search) only fires when a coin actually trips a volume-spike or book-imbalance threshold, capped by the minimum interval above. Notifications only fire while this tab is open in your browser.
+      There is no scheduled "full scan" — Anthropic is only ever called when a coin actually trips a volume-spike or book-imbalance threshold. This checks free order-book/volume data every couple of minutes for free; the number above is just a cooldown floor between triggered scans, not a timer that forces one. If nothing trips a signal, nothing gets called, no matter how much time passes. Notifications only fire while this tab is open in your browser.
     </div>
 
     <div class="section-label">Trade Agent — Risk Rules</div>
@@ -427,9 +431,13 @@
         <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Default take-profit (%)</label>
         <input type="number" id="defaultTakeProfitPctInput" placeholder="3" step="any">
       </div>
+      <div class="field">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Max stop-loss distance (% from entry)</label>
+        <input type="number" id="maxStopLossPctInput" placeholder="5" step="any">
+      </div>
     </div>
     <div class="warn-box" style="margin-top:10px;">
-      A stop-loss is required on every agent-sourced trade. The default take-profit fills in automatically wherever a take-profit is left blank — on manual orders below and on agent recommendations that didn't suggest one — but you can always edit or clear it before confirming.
+      A stop-loss is required on every agent-sourced trade, and now it's bounded too: if the AI's stop (or one you type manually) sits farther from entry than the limit above, confirm is blocked until you tighten it or the size instead. Combined with max position size, this caps how much a single trade can lose. The default take-profit fills in automatically wherever a take-profit is left blank — on manual orders below and on agent recommendations that didn't suggest one — but you can always edit or clear it before confirming.
     </div>
 
     <div class="section-label">Sync to GitHub bot</div>
@@ -519,7 +527,7 @@
     network:'hlDash_network', address:'hlDash_accountAddress', agentKey:'hlDash_agentKey',
     anthropicKey:'hlDash_anthropicKey', watchlist:'hlDash_watchlist',
     maxPositionPct:'hlDash_maxPositionPct', maxLeverage:'hlDash_maxLeverage',
-    defaultTakeProfitPct:'hlDash_defaultTakeProfitPct',
+    defaultTakeProfitPct:'hlDash_defaultTakeProfitPct', maxStopLossPct:'hlDash_maxStopLossPct',
     scanMode:'hlDash_scanMode', filteredTopN:'hlDash_filteredTopN',
     filteredMinOI:'hlDash_filteredMinOI', filteredMinVolume24h:'hlDash_filteredMinVolume24h',
     githubRepo:'hlDash_githubRepo', githubPat:'hlDash_githubPat', autoPublishConfig:'hlDash_autoPublishConfig',
@@ -535,6 +543,7 @@
     maxPositionPct: parseFloat(localStorage.getItem(LS_KEYS.maxPositionPct)) || 5,
     maxLeverage: parseFloat(localStorage.getItem(LS_KEYS.maxLeverage)) || 3,
     defaultTakeProfitPct: parseFloat(localStorage.getItem(LS_KEYS.defaultTakeProfitPct)) || 3,
+    maxStopLossPct: parseFloat(localStorage.getItem(LS_KEYS.maxStopLossPct)) || 5,
     scanMode: localStorage.getItem(LS_KEYS.scanMode) || 'watchlist',
     filteredTopN: parseInt(localStorage.getItem(LS_KEYS.filteredTopN), 10) || 20,
     filteredMinOI: parseFloat(localStorage.getItem(LS_KEYS.filteredMinOI)) || 1000000,
@@ -788,31 +797,43 @@
         tif = document.getElementById('tifInput').value;
       }
 
-      log('Submitting '+(isBuy?'BUY':'SELL')+' '+sz+' '+currentCoin+' @ '+limitPx.toFixed(2)+' ('+tif+')…');
       const takeProfitInput = parseFloat(document.getElementById('ticketTakeProfit').value);
-      let result;
+      const stopLossInput = parseFloat(document.getElementById('ticketStopLoss').value);
+
+      if(stopLossInput && stopLossInput > 0){
+        const refPx = orderType === 'market' ? (lastMids[currentCoin] ? parseFloat(lastMids[currentCoin]) : limitPx) : limitPx;
+        const stopDistPct = Math.abs(refPx - stopLossInput) / refPx * 100;
+        if(stopDistPct > cfg.maxStopLossPct + 0.01){
+          log('Stop-loss is '+stopDistPct.toFixed(1)+'% from price — exceeds your max stop-loss distance ('+cfg.maxStopLossPct+'%). Tighten it or raise the limit in Settings.', 'err');
+          return;
+        }
+      }
+
+      log('Submitting '+(isBuy?'BUY':'SELL')+' '+sz+' '+currentCoin+' @ '+limitPx.toFixed(2)+' ('+tif+')…');
+      const orders = [{
+        coin: currentCoin + '-PERP', is_buy: isBuy, sz: sz,
+        limit_px: parseFloat(limitPx.toFixed(2)),
+        order_type: { limit: { tif: tif } }, reduce_only: reduceOnly
+      }];
+      if(stopLossInput && stopLossInput > 0){
+        orders.push({
+          coin: currentCoin + '-PERP', is_buy: !isBuy, sz: sz,
+          limit_px: parseFloat(stopLossInput.toFixed(2)),
+          order_type: { trigger: { isMarket: true, triggerPx: stopLossInput.toFixed(2), tpsl: 'sl' } },
+          reduce_only: true
+        });
+      }
       if(takeProfitInput && takeProfitInput > 0){
-        const orders = [{
-          coin: currentCoin + '-PERP', is_buy: isBuy, sz: sz,
-          limit_px: parseFloat(limitPx.toFixed(2)),
-          order_type: { limit: { tif: tif } }, reduce_only: reduceOnly
-        }, {
+        orders.push({
           coin: currentCoin + '-PERP', is_buy: !isBuy, sz: sz,
           limit_px: parseFloat(takeProfitInput.toFixed(2)),
           order_type: { trigger: { isMarket: true, triggerPx: takeProfitInput.toFixed(2), tpsl: 'tp' } },
           reduce_only: true
-        }];
-        result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
-      } else {
-        result = await sdk.exchange.placeOrder({
-          coin: currentCoin + '-PERP',
-          is_buy: isBuy,
-          sz: sz,
-          limit_px: parseFloat(limitPx.toFixed(2)),
-          order_type: { limit: { tif: tif } },
-          reduce_only: reduceOnly
         });
       }
+      const result = orders.length > 1
+        ? await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' })
+        : await sdk.exchange.placeOrder(orders[0]);
       log('Order response: ' + JSON.stringify(result).slice(0,140), 'ok');
       loadAccountState();
     }catch(e){
@@ -1031,7 +1052,8 @@
       + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
       + "You NEVER place trades yourself; you only propose them for human review. "
       + "Return at most 3 ideas — only ones with genuine technical conviction; return fewer or none if nothing qualifies. "
-      + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing). "
+      + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing), "
+      + "and ideally within about " + cfg.maxStopLossPct + "% of entry — trades needing a wider stop than that to make sense are usually not a fit here. "
       + "Be concise: rationale <= 35 words, sentiment_note <= 20 words. "
       + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
       + '{"recommendations":[{"coin":string,"direction":"long"|"short","conviction":"low"|"medium"|"high",'
@@ -1272,6 +1294,10 @@
     if(equity && pctOfEquity > cfg.maxPositionPct + 0.01) problems.push('Exceeds max position size ('+cfg.maxPositionPct+'% of equity).');
     if(leverage > cfg.maxLeverage + 0.01) problems.push('Exceeds max leverage ('+cfg.maxLeverage+'x).');
     if(!size || !entryPx) problems.push('Entry price and size are required.');
+    if(stopLoss && entryPx){
+      const stopDistPct = Math.abs(entryPx - stopLoss) / entryPx * 100;
+      if(stopDistPct > cfg.maxStopLossPct + 0.01) problems.push('Stop is '+stopDistPct.toFixed(1)+'% from entry, exceeds max stop-loss distance ('+cfg.maxStopLossPct+'%).');
+    }
 
     if(problems.length){
       box.className = 'risk-check bad';
@@ -1408,6 +1434,7 @@
       maxPositionPct: cfg.maxPositionPct,
       maxLeverage: cfg.maxLeverage,
       defaultTakeProfitPct: cfg.defaultTakeProfitPct,
+      maxStopLossPct: cfg.maxStopLossPct,
       paused: cfg.autoScanPaused,
       updated_at: new Date().toISOString()
     };
@@ -1530,6 +1557,7 @@
       document.getElementById('maxPositionPctInput').value = cfg.maxPositionPct;
       document.getElementById('maxLeverageInput').value = cfg.maxLeverage;
       document.getElementById('defaultTakeProfitPctInput').value = cfg.defaultTakeProfitPct;
+      document.getElementById('maxStopLossPctInput').value = cfg.maxStopLossPct;
       document.getElementById('githubRepoInput').value = cfg.githubRepo;
       document.getElementById('githubPatInput').value = cfg.githubPat;
       document.getElementById('autoPublishConfig').checked = cfg.autoPublishConfig;
@@ -1556,6 +1584,7 @@
       cfg.maxPositionPct = parseFloat(document.getElementById('maxPositionPctInput').value) || cfg.maxPositionPct;
       cfg.maxLeverage = parseFloat(document.getElementById('maxLeverageInput').value) || cfg.maxLeverage;
       cfg.defaultTakeProfitPct = parseFloat(document.getElementById('defaultTakeProfitPctInput').value) || cfg.defaultTakeProfitPct;
+      cfg.maxStopLossPct = parseFloat(document.getElementById('maxStopLossPctInput').value) || cfg.maxStopLossPct;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
       publishConfigToGitHub();
@@ -1572,6 +1601,7 @@
       cfg.maxPositionPct = parseFloat(document.getElementById('maxPositionPctInput').value) || 5;
       cfg.maxLeverage = parseFloat(document.getElementById('maxLeverageInput').value) || 3;
       cfg.defaultTakeProfitPct = parseFloat(document.getElementById('defaultTakeProfitPctInput').value) || 3;
+      cfg.maxStopLossPct = parseFloat(document.getElementById('maxStopLossPctInput').value) || 5;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
       cfg.autoPublishConfig = document.getElementById('autoPublishConfig').checked;
@@ -1590,6 +1620,7 @@
       localStorage.setItem(LS_KEYS.maxPositionPct, cfg.maxPositionPct);
       localStorage.setItem(LS_KEYS.maxLeverage, cfg.maxLeverage);
       localStorage.setItem(LS_KEYS.defaultTakeProfitPct, cfg.defaultTakeProfitPct);
+      localStorage.setItem(LS_KEYS.maxStopLossPct, cfg.maxStopLossPct);
       localStorage.setItem(LS_KEYS.githubRepo, cfg.githubRepo);
       localStorage.setItem(LS_KEYS.githubPat, cfg.githubPat);
       localStorage.setItem(LS_KEYS.autoPublishConfig, cfg.autoPublishConfig);

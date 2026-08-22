@@ -1,36 +1,3 @@
 {
-  "recommendations": [
-    {
-      "coin": "HYPE",
-      "direction": "short",
-      "conviction": "medium",
-      "pattern": "bearish_engulfing",
-      "indicators_confirming": [
-        "RSI14 63 rolling over from near-overbought",
-        "MACD histogram positive but fading (0.1119)",
-        "Price pressing upper Bollinger Band ($79.54) — mean-reversion setup",
-        "Order book ask-heavy at -39.6% imbalance"
-      ],
-      "sentiment_note": "Galaxy Digital moved $4.2M HYPE to exchange Aug 21, implying near-term sell pressure.",
-      "rationale": "Bearish engulfing at upper BB ($79.54) with ask-heavy book, low spot volume (0.49x avg), RSI fading, and fresh institutional supply overhang. Near-term mean-reversion to mid-BB likely.",
-      "time_horizon": "1–4 hours",
-      "entry_price": 78.9,
-      "stop_loss_price": 80.85,
-      "take_profit_price": 78.19,
-      "suggested_size_pct_equity": 4,
-      "suggested_leverage": 3,
-      "risk_flags": [
-        "Kraken DEX integration news could spark sudden bid",
-        "Single-coin analysis — no basket diversification",
-        "Low absolute volume reduces pattern reliability",
-        "Positive funding (0.0032%) creates slight cost drag on short",
-        "HYPE near all-time high zone — upside momentum can resume quickly"
-      ],
-      "id": "vqja1x4gq6",
-      "generated_at": "2026-08-22T19:08:40.493Z",
-      "expires_at": "2026-08-22T22:08:40.494Z",
-      "source": "backend",
-      "status": "pending"
-    }
-  ]
+  "recommendations": []
 }
