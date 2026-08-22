@@ -64,7 +64,11 @@ Not secret, just config — you can change these anytime without touching code.
 
 | Name | Value | Notes |
 |---|---|---|
-| `WATCHLIST` | `BTC,ETH,SOL,HYPE` | Comma-separated, should match the dashboard's watchlist |
+| `WATCHLIST` | `BTC,ETH,SOL,HYPE` | Comma-separated, should match the dashboard's watchlist. Ignored if `SCAN_MODE=filtered` |
+| `SCAN_MODE` | `watchlist` | `watchlist` or `filtered`. Filtered mode ranks the whole Hyperliquid perp universe by 24h volume, drops anything below your OI/volume floors, and scans the top N that remain — no ticker list to maintain |
+| `FILTERED_TOP_N` | `20` | Only used in filtered mode — how many top-ranked coins to actually scan |
+| `FILTERED_MIN_OI` | `1000000` | Only used in filtered mode — minimum open interest (USD) to be eligible |
+| `FILTERED_MIN_VOLUME_24H` | `2000000` | Only used in filtered mode — minimum 24h volume (USD) to be eligible |
 | `HL_NETWORK` | `mainnet` | Signal data should come from mainnet even if you execute on testnet — testnet volume isn't real |
 | `HL_EXEC_NETWORK` | `testnet` | **Where trades actually execute.** Change to `mainnet` only when you're ready to risk real funds |
 | `AUTO_SCAN_INTERVAL_MIN` | `30` | Minimum minutes between full (paid) research scans |
@@ -78,6 +82,17 @@ Not secret, just config — you can change these anytime without touching code.
 Both workflows run automatically once merged to `main` — nothing extra to enable. To test immediately: go to the **Actions** tab → pick a workflow → **Run workflow**.
 
 Check each run's logs to see what it decided (skipped on cooldown, no signal tripped, found something and messaged Telegram, or a Telegram button was handled).
+
+## 7. (Optional) Sync dashboard settings to the bot
+
+By default, the dashboard's Settings (watchlist, scan mode, filtered-universe thresholds, max position %, max leverage, default take-profit) are separate from the GitHub Variables above — they only affect the dashboard's own manual/in-browser scanning. To have one save update both:
+
+1. Create a **fine-grained GitHub personal access token**: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Scope it to **this one repository only**, with **Contents: Read and write** permission and nothing else.
+2. In the dashboard's Settings, under "Sync to GitHub bot", enter your repo as `owner/repo-name` and paste the token.
+3. Either check "Auto-publish these settings to the bot whenever I save", or just click **Publish now** whenever you want to push a change.
+4. This writes `docs/agent-config.json` in your repo. Both `scan.js` and `poll_telegram.js` read it automatically and use it in place of the matching GitHub Variables — no code changes, no re-running workflows manually.
+
+This token can only edit files in this repo — it can't touch other repos, your account, or (unlike the Hyperliquid keys) any funds. Still, keep its scope as narrow as shown above.
 
 ---
 
@@ -98,6 +113,14 @@ Check each run's logs to see what it decided (skipped on cooldown, no signal tri
 - **GitHub Actions**: free tier comfortably covers both workflows at these cadences — most runs finish in a few seconds unless they're actually calling Anthropic or executing a trade.
 - **Anthropic**: you're only billed on runs where a signal actually trips — the local order-book/volume check is the whole point of keeping this cheap.
 - **Telegram**: free.
+
+## How the agent thinks now
+
+The agent's primary evidence is technical: for every coin it researches, it pulls ~120 recent 15-minute candles and computes RSI(14), SMA(20/50), MACD, Bollinger Bands, volume vs. its 20-bar average, and checks for a handful of classic candlestick patterns (bullish/bearish engulfing, hammer, shooting star, doji) — all done in plain JS, not left to the model to eyeball. Only when that technical picture is genuinely compelling (a real pattern, confirmed by volume, with at least one indicator agreeing) does it do a quick supplementary web search for sentiment/news — used only to confirm or flag a conflict, never as the primary reason for a trade. Every recommendation now carries `pattern`, `indicators_confirming`, and a short `sentiment_note` instead of the old catalyst-first framing.
+
+## Pausing
+
+The Agent tab has a **Pause auto-scan** button. Toggling it stops the dashboard's own in-browser auto-scan immediately, and — if you've set up GitHub sync (below) — publishes the paused state to `docs/agent-config.json`, so the backend scanner skips its scheduled runs too until you resume. Manual "Scan for opportunities" and the Telegram poller (for already-pending recommendations) both keep working while paused; pausing only stops *new* automatic scans from firing.
 
 ## Security summary
 
