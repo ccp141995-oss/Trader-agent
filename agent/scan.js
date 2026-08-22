@@ -25,6 +25,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
+let MAX_STOP_LOSS_PCT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
 
 function shortId(){
   return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -288,7 +289,8 @@ function buildAgentPrompt(signals, technicals){
     + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
     + "You NEVER place trades yourself; you only propose them for human review. "
     + "Return at most 3 ideas — only ones with genuine technical conviction; return fewer or none if nothing qualifies. "
-    + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing). "
+    + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing), "
+    + "and ideally within about " + MAX_STOP_LOSS_PCT + "% of entry — trades needing a wider stop than that to make sense are usually not a fit here. "
     + "Be concise: rationale <= 35 words, sentiment_note <= 20 words. "
     + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
     + '{"recommendations":[{"coin":string,"direction":"long"|"short","conviction":"low"|"medium"|"high",'
@@ -372,6 +374,7 @@ async function main(){
     if(shared.filteredTopN) FILTERED_TOP_N = parseInt(shared.filteredTopN, 10);
     if(shared.filteredMinOI) FILTERED_MIN_OI = parseFloat(shared.filteredMinOI);
     if(shared.filteredMinVolume24h) FILTERED_MIN_VOLUME_24H = parseFloat(shared.filteredMinVolume24h);
+    if(shared.maxStopLossPct) MAX_STOP_LOSS_PCT = parseFloat(shared.maxStopLossPct);
   }
 
   const allCoins = await resolveCoins();

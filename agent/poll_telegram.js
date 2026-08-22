@@ -19,9 +19,11 @@ const HL_ACCOUNT_ADDRESS = process.env.HL_ACCOUNT_ADDRESS;
 const MAX_POSITION_PCT_DEFAULT = parseFloat(process.env.MAX_POSITION_PCT || '5');
 const MAX_LEVERAGE_DEFAULT = parseFloat(process.env.MAX_LEVERAGE || '3');
 const DEFAULT_TAKE_PROFIT_PCT_DEFAULT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
+const MAX_STOP_LOSS_PCT_DEFAULT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
 let MAX_POSITION_PCT = MAX_POSITION_PCT_DEFAULT;
 let MAX_LEVERAGE = MAX_LEVERAGE_DEFAULT;
 let DEFAULT_TAKE_PROFIT_PCT = DEFAULT_TAKE_PROFIT_PCT_DEFAULT;
+let MAX_STOP_LOSS_PCT = MAX_STOP_LOSS_PCT_DEFAULT;
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
 const MAX_PRICE_DRIFT_PCT = 2.5; // abort if price moved more than this since the recommendation was made
 
@@ -40,7 +42,8 @@ function loadSharedConfig(){
   if(shared.maxPositionPct) MAX_POSITION_PCT = parseFloat(shared.maxPositionPct);
   if(shared.maxLeverage) MAX_LEVERAGE = parseFloat(shared.maxLeverage);
   if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
-  console.log(`Using dashboard-published risk config: max ${MAX_POSITION_PCT}% equity, ${MAX_LEVERAGE}x leverage, ${DEFAULT_TAKE_PROFIT_PCT}% default TP (updated ${shared.updated_at || 'unknown'})`);
+  if(shared.maxStopLossPct) MAX_STOP_LOSS_PCT = parseFloat(shared.maxStopLossPct);
+  console.log(`Using dashboard-published risk config: max ${MAX_POSITION_PCT}% equity, ${MAX_LEVERAGE}x leverage, ${DEFAULT_TAKE_PROFIT_PCT}% default TP, ${MAX_STOP_LOSS_PCT}% max stop distance (updated ${shared.updated_at || 'unknown'})`);
 }
 
 async function tg(method, body){
@@ -97,6 +100,11 @@ async function executeTrade(rec){
   const isBuy = rec.direction !== 'short';
   if(isBuy && !(rec.stop_loss_price < currentMid)) throw new Error('Stop-loss is no longer below current price — thesis looks invalidated');
   if(!isBuy && !(rec.stop_loss_price > currentMid)) throw new Error('Stop-loss is no longer above current price — thesis looks invalidated');
+
+  const stopDistPct = Math.abs(currentMid - rec.stop_loss_price) / currentMid * 100;
+  if(stopDistPct > MAX_STOP_LOSS_PCT){
+    throw new Error(`Stop-loss is ${stopDistPct.toFixed(1)}% from price, exceeds your max stop-loss distance (${MAX_STOP_LOSS_PCT}%) — skipped for safety`);
+  }
 
   const equity = await getAccountEquity();
   if(!equity) throw new Error('Could not read account equity to size the trade');
