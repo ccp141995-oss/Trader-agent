@@ -62,9 +62,10 @@
       "generated_at": "2026-08-22T22:53:17.628Z",
       "expires_at": "2026-08-23T01:53:17.629Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "telegram_message_id": 6,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Could not read account equity to size the trade"
     }
   ]
 }
