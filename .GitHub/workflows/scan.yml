@@ -32,6 +32,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WATCHLIST: ${{ vars.WATCHLIST }}
+          SCAN_MODE: ${{ vars.SCAN_MODE }}
+          FILTERED_TOP_N: ${{ vars.FILTERED_TOP_N }}
+          FILTERED_MIN_OI: ${{ vars.FILTERED_MIN_OI }}
+          FILTERED_MIN_VOLUME_24H: ${{ vars.FILTERED_MIN_VOLUME_24H }}
           HL_NETWORK: ${{ vars.HL_NETWORK }}
           AUTO_SCAN_INTERVAL_MIN: ${{ vars.AUTO_SCAN_INTERVAL_MIN }}
           SIGNAL_SENSITIVITY: ${{ vars.SIGNAL_SENSITIVITY }}
