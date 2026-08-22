@@ -135,6 +135,7 @@
   .warn-box{background:#1a1408;border:1px solid #4a3a12;color:var(--amber);font-size:11.5px;padding:10px 12px;border-radius:6px;margin-bottom:16px;line-height:1.5;}
   .modal-actions{display:flex;gap:8px;margin-top:6px;}
   .btn-primary{flex:1;padding:10px;background:var(--mint);color:#04140d;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-size:13px;}
+  .btn-primary:disabled{background:var(--line);color:var(--muted);cursor:not-allowed;opacity:.7;}
   .btn-secondary{padding:10px 14px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:6px;cursor:pointer;font-size:13px;}
   .net-toggle{display:flex;gap:6px;}
   .net-toggle button{flex:1;padding:8px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);cursor:pointer;font-size:12px;}
@@ -238,6 +239,10 @@
   <div class="main-col">
     <div class="chart-toolbar">
       <div style="display:flex;align-items:center;gap:14px;">
+        <div class="interval-group" id="chartModeGroup">
+          <button class="interval-btn active" data-mode="market">Market</button>
+          <button class="interval-btn" data-mode="portfolio">Portfolio</button>
+        </div>
         <select class="coin-select" id="coinSelect"><option>BTC</option></select>
         <span class="mark-price mono" id="markPrice">—</span>
       </div>
@@ -248,6 +253,12 @@
         <button class="interval-btn" data-i="1h">1h</button>
         <button class="interval-btn" data-i="4h">4h</button>
         <button class="interval-btn" data-i="1d">1d</button>
+      </div>
+      <div class="interval-group" id="portfolioPeriodGroup" style="display:none;">
+        <button class="interval-btn" data-p="day">Day</button>
+        <button class="interval-btn" data-p="week">Week</button>
+        <button class="interval-btn active" data-p="month">Month</button>
+        <button class="interval-btn" data-p="allTime">All</button>
       </div>
     </div>
     <div id="chart"></div>
@@ -306,7 +317,10 @@
       <div class="tab" data-tab="agent">Agent</div>
     </div>
     <div class="panel-body">
-      <div class="panel-view active" id="view-positions"><div class="empty-state">No account connected.</div></div>
+      <div class="panel-view active" id="view-positions">
+        <button id="emergencyExitBtn" style="display:none;width:100%;padding:11px;margin-bottom:10px;background:#2a0a0a;border:1px solid var(--red);color:var(--red);border-radius:6px;font-weight:700;font-size:12px;letter-spacing:.03em;cursor:pointer;">🚨 Emergency Exit — Close All Positions</button>
+        <div id="positionsList"><div class="empty-state">No account connected.</div></div>
+      </div>
       <div class="panel-view" id="view-orders"><div class="empty-state">No account connected.</div></div>
       <div class="panel-view" id="view-balances"><div class="empty-state">No account connected.</div></div>
       <div class="panel-view" id="view-agent">
@@ -508,6 +522,7 @@
       </div>
     </div>
     <div class="risk-check" id="riskCheckBox"></div>
+    <div class="risk-check" id="executeStatusBox" style="display:none;"></div>
     <div class="agent-disclaimer" style="border-top:none;padding-top:0;">
       Not financial advice. You are solely responsible for any trade you confirm below.
     </div>
@@ -566,6 +581,8 @@
   let connected = false;
   let currentCoin = 'BTC';
   let currentInterval = '15m';
+  let chartMode = 'market';
+  let portfolioPeriod = 'month';
   let side = 'buy';
   let lastMids = {};
   let universe = [];
@@ -574,6 +591,7 @@
   let pollTimers = [];
   let recommendations = [];
   let lastAccountValue = null;
+  let lastPositions = [];
   let dismissedIds = JSON.parse(localStorage.getItem('hlDash_dismissedRecIds') || '[]');
   const BACKEND_FEED_URL = './recommendations.json';
 
@@ -631,6 +649,7 @@
   }
 
   async function loadCandles(){
+    if(chartMode !== 'market') return;
     try{
       const ms = INTERVAL_MS[currentInterval];
       const endTime = Date.now();
@@ -646,6 +665,54 @@
       const prev = bars[bars.length-2] || last;
       updateMarkPrice(last.close, last.close >= prev.close);
     }catch(e){ log('Candle load failed: '+e.message, 'err'); }
+  }
+
+  async function loadPortfolioChart(){
+    if(!cfg.address){ log('Connect an account in Settings to see the portfolio chart', 'err'); return; }
+    try{
+      const data = await infoPost({ type:'portfolio', user: cfg.address });
+      const entry = data.find(([period]) => period === portfolioPeriod);
+      if(!entry || !entry[1] || !entry[1].accountValueHistory || !entry[1].accountValueHistory.length){
+        document.getElementById('markPrice').textContent = 'No history yet';
+        candleSeries.setData([]);
+        return;
+      }
+      const points = entry[1].accountValueHistory.map(([t, v]) => ({ time: Math.floor(t/1000), value: parseFloat(v) }));
+
+      // Bucket into synthetic OHLC candles so the existing candlestick series can render equity growth.
+      const bucketSeconds = portfolioPeriod === 'day' ? 3600 : portfolioPeriod === 'week' ? 3600*6 : 86400;
+      const buckets = {};
+      points.forEach(p => {
+        const bucketTime = Math.floor(p.time / bucketSeconds) * bucketSeconds;
+        if(!buckets[bucketTime]) buckets[bucketTime] = [];
+        buckets[bucketTime].push(p.value);
+      });
+      const bars = Object.keys(buckets).sort((a,b)=>a-b).map(bt => {
+        const vals = buckets[bt];
+        return {
+          time: parseInt(bt,10),
+          open: vals[0], close: vals[vals.length-1],
+          high: Math.max(...vals), low: Math.min(...vals)
+        };
+      });
+      if(!bars.length) return;
+      candleSeries.setData(bars);
+      const last = bars[bars.length-1];
+      const first = bars[0];
+      const el = document.getElementById('markPrice');
+      el.textContent = fmtUsd(last.close);
+      el.className = 'mark-price mono ' + (last.close >= first.open ? 'up' : 'down');
+    }catch(e){ log('Portfolio chart load failed: '+e.message, 'err'); }
+  }
+
+  function setChartMode(mode){
+    chartMode = mode;
+    document.querySelectorAll('#chartModeGroup .interval-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+    document.getElementById('coinSelect').style.display = mode === 'market' ? '' : 'none';
+    document.getElementById('intervalGroup').style.display = mode === 'market' ? 'flex' : 'none';
+    document.getElementById('portfolioPeriodGroup').style.display = mode === 'portfolio' ? 'flex' : 'none';
+    if(mode === 'market'){ loadCandles(); }
+    else { loadPortfolioChart(); }
   }
 
   function updateMarkPrice(px, up){
@@ -704,10 +771,25 @@
     }catch(e){ log('Open orders failed: '+e.message, 'err'); }
   }
 
+  async function loadSpotUsdcBalance(){
+    try{
+      const state = await infoPost({ type:'spotClearinghouseState', user: cfg.address });
+      const usdc = (state.balances || []).find(b => b.coin === 'USDC');
+      return usdc ? parseFloat(usdc.total) : 0;
+    }catch(e){ return null; }
+  }
+
   function renderPositions(state){
-    const el = document.getElementById('view-positions');
+    const el = document.getElementById('positionsList');
+    const exitBtn = document.getElementById('emergencyExitBtn');
     const positions = (state.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0);
-    if(!positions.length){ el.innerHTML = '<div class="empty-state">No open positions.</div>'; return; }
+    lastPositions = positions;
+    if(!positions.length){
+      el.innerHTML = '<div class="empty-state">No open positions.</div>';
+      exitBtn.style.display = 'none';
+      return;
+    }
+    exitBtn.style.display = 'block';
     el.innerHTML = positions.map(ap => {
       const p = ap.position;
       const szi = parseFloat(p.szi);
@@ -734,6 +816,27 @@
     });
   }
 
+  async function emergencyExitAll(){
+    if(!lastPositions || !lastPositions.length){ log('No open positions to close.', 'err'); return; }
+    const summary = lastPositions.map(ap => ap.position.coin + ' ' + (parseFloat(ap.position.szi) > 0 ? 'long' : 'short')).join(', ');
+    const ok = confirm('Close ALL open positions at market?\n\n' + summary + '\n\nThis places reduce-only market orders immediately and cannot be undone.');
+    if(!ok) return;
+
+    const btn = document.getElementById('emergencyExitBtn');
+    btn.disabled = true; btn.textContent = 'Closing all positions…';
+    log('Emergency exit triggered: closing ' + lastPositions.length + ' position(s)…', 'err');
+    for(const ap of lastPositions){
+      try{
+        await closePosition(ap.position.coin, parseFloat(ap.position.szi));
+      }catch(e){
+        log('Emergency exit: failed to close ' + ap.position.coin + ': ' + e.message, 'err');
+      }
+    }
+    btn.disabled = false; btn.textContent = '🚨 Emergency Exit — Close All Positions';
+    log('Emergency exit complete.', 'ok');
+    loadAccountState();
+  }
+
   function renderOrders(orders){
     const el = document.getElementById('view-orders');
     if(!orders || !orders.length){ el.innerHTML = '<div class="empty-state">No open orders.</div>'; return; }
@@ -749,17 +852,33 @@
     });
   }
 
-  function renderBalances(state){
+  async function renderBalances(state){
     const el = document.getElementById('view-balances');
     const ms = state.marginSummary || {};
     const withdrawable = state.withdrawable;
     lastAccountValue = parseFloat(ms.accountValue) || lastAccountValue;
-    el.innerHTML = ''
+    let html = ''
       + balLine('Account Value', fmtUsd(ms.accountValue))
       + balLine('Withdrawable', fmtUsd(withdrawable))
       + balLine('Total Margin Used', fmtUsd(ms.totalMarginUsed))
       + balLine('Total Position Value', fmtUsd(ms.totalNtlPos))
-      + balLine('Total Raw USD', fmtUsd(ms.totalRawUsd));
+      + balLine('Total Raw USD', fmtUsd(ms.totalRawUsd))
+      + '<div style="font-size:10px;color:var(--muted-2);margin-top:8px;">Querying '+cfg.network+': '+cfg.address.slice(0,8)+'…'+cfg.address.slice(-6)+'</div>';
+
+    if(!parseFloat(ms.accountValue)){
+      const spotUsdc = await loadSpotUsdcBalance();
+      if(spotUsdc !== null && spotUsdc > 0){
+        html += '<div class="warn-box" style="margin-top:10px;">'
+          + 'Perps account value is $0, but you have '+fmtUsd(spotUsdc)+' USDC in your <b>Spot</b> balance on this address. '
+          + 'Hyperliquid keeps Spot and Perps balances separate — in the Hyperliquid app, transfer USDC from Spot to your Perps account before it will show up here.'
+          + '</div>';
+      } else if(spotUsdc === 0){
+        html += '<div class="warn-box" style="margin-top:10px;">'
+          + 'No funds found in either Perps or Spot for this address on '+cfg.network+'. Double-check this is the exact address you deposited/faucet\'d to, and that the network toggle in Settings matches where those funds are.'
+          + '</div>';
+      }
+    }
+    el.innerHTML = html;
 
     document.getElementById('acctSummary').style.display = 'flex';
     document.getElementById('sAccountValue').textContent = fmtUsd(ms.accountValue);
@@ -966,6 +1085,108 @@
       + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none detected')+' (15m candles)';
   }
 
+  // ---------------- Risk-level resolution (AI value -> technical calc -> settings fallback) ----------------
+  function resolveRiskLevels(rec, technicals, maxStopLossPct, defaultTakeProfitPct){
+    const isLong = rec.direction !== 'short';
+    const entry = rec.entry_price;
+    const t = technicals;
+    const notes = [];
+
+    let stop = rec.stop_loss_price;
+    let stopValid = stop && isFinite(stop) && stop > 0 && (isLong ? stop < entry : stop > entry);
+    let stopDistPct = stopValid ? Math.abs(entry - stop) / entry * 100 : null;
+
+    if(stopValid && stopDistPct <= maxStopLossPct){
+      notes.push('stop: AI-suggested');
+    } else if(t && t.swingLow != null && t.swingHigh != null){
+      const bandWidth = (t.bbUpper != null && t.bbLower != null) ? (t.bbUpper - t.bbLower) : (entry * 0.01);
+      const buffer = bandWidth * 0.1;
+      const swingStop = isLong ? (t.swingLow - buffer) : (t.swingHigh + buffer);
+      const swingDistPct = Math.abs(entry - swingStop) / entry * 100;
+      if(swingStop > 0 && swingDistPct > 0 && swingDistPct <= maxStopLossPct){
+        stop = swingStop; stopDistPct = swingDistPct;
+        notes.push(stopValid ? 'stop: AI value exceeded max distance, replaced with swing-based technical stop' : 'stop: technical swing-based (no valid AI value)');
+      } else {
+        stop = isLong ? entry * (1 - maxStopLossPct/100) : entry * (1 + maxStopLossPct/100);
+        stopDistPct = maxStopLossPct;
+        notes.push('stop: capped at max stop-loss distance setting (technical/AI stop was out of range)');
+      }
+    } else {
+      stop = isLong ? entry * (1 - maxStopLossPct/100) : entry * (1 + maxStopLossPct/100);
+      stopDistPct = maxStopLossPct;
+      notes.push('stop: capped at max stop-loss distance setting (no technicals or AI value available)');
+    }
+
+    let tp = rec.take_profit_price;
+    const tpValid = tp && isFinite(tp) && tp > 0 && (isLong ? tp > entry : tp < entry);
+    if(tpValid){
+      notes.push('target: AI-suggested');
+    } else {
+      const rrTarget = isLong ? entry * (1 + (stopDistPct*1.5)/100) : entry * (1 - (stopDistPct*1.5)/100);
+      if(rrTarget > 0){
+        tp = rrTarget;
+        notes.push('target: 1.5x risk:reward from resolved stop (no valid AI target)');
+      } else {
+        tp = isLong ? entry * (1 + defaultTakeProfitPct/100) : entry * (1 - defaultTakeProfitPct/100);
+        notes.push('target: default take-profit % setting (fallback)');
+      }
+    }
+
+    rec.stop_loss_price = parseFloat(stop.toFixed(2));
+    rec.take_profit_price = parseFloat(tp.toFixed(2));
+    rec.risk_flags = (rec.risk_flags || []).concat(notes.filter(n => !n.includes('AI-suggested')));
+    return rec;
+  }
+
+  function technicalOnlySignal(t){
+    if(!t) return null;
+    const bullPatterns = ['bullish_engulfing','hammer'];
+    const bearPatterns = ['bearish_engulfing','shooting_star'];
+    const hasBull = t.patterns.some(p => bullPatterns.includes(p));
+    const hasBear = t.patterns.some(p => bearPatterns.includes(p));
+    const macdBull = t.macdHist != null && t.macdHist > 0;
+    const macdBear = t.macdHist != null && t.macdHist < 0;
+    const nearLowerBand = t.bbLower != null && t.lastClose <= t.bbLower * 1.01;
+    const nearUpperBand = t.bbUpper != null && t.lastClose >= t.bbUpper * 0.99;
+    const rsiOversold = t.rsi14 != null && t.rsi14 < 35;
+    const rsiOverbought = t.rsi14 != null && t.rsi14 > 65;
+
+    const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold'].filter(Boolean);
+    const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought'].filter(Boolean);
+
+    if(bullFactors.length >= 2 && bullFactors.length > bearFactors.length){
+      return { direction:'long', confirming: bullFactors, pattern: t.patterns.filter(p=>bullPatterns.includes(p)).join(', ') || 'momentum confluence (no single candle pattern)' };
+    }
+    if(bearFactors.length >= 2 && bearFactors.length > bullFactors.length){
+      return { direction:'short', confirming: bearFactors, pattern: t.patterns.filter(p=>bearPatterns.includes(p)).join(', ') || 'momentum confluence (no single candle pattern)' };
+    }
+    return null;
+  }
+
+  function buildFallbackRecommendations(scanCoins, technicals, maxPositionPct, maxStopLossPct, defaultTakeProfitPct){
+    const recs = [];
+    for(const coin of scanCoins){
+      const t = technicals[coin];
+      const signal = technicalOnlySignal(t);
+      if(!signal) continue;
+      let rec = {
+        coin, direction: signal.direction, conviction: 'low',
+        pattern: signal.pattern, indicators_confirming: signal.confirming,
+        sentiment_note: 'Not available — Anthropic was unreachable (likely low credits), so this idea is technicals-only with no sentiment/news check.',
+        rationale: 'Technical confluence only: ' + signal.confirming.join(', ') + '. No AI research performed.',
+        time_horizon: 'Short-term (technical fallback)',
+        entry_price: t.lastClose,
+        stop_loss_price: null, take_profit_price: null,
+        suggested_size_pct_equity: Math.max(1, Math.round((maxPositionPct/2) * 10) / 10),
+        suggested_leverage: 1,
+        risk_flags: ['technicals-only fallback — no sentiment/news confirmation']
+      };
+      rec = resolveRiskLevels(rec, t, maxStopLossPct, defaultTakeProfitPct);
+      recs.push(rec);
+    }
+    return recs.slice(0, 3);
+  }
+
   // ---------------- Trade Agent ----------------
   async function loadMarketContext(coins){
     // metaAndAssetCtxs gives markPx, prevDayPx (24h move), funding rate and open interest.
@@ -1111,37 +1332,53 @@
       for(const c of coins){ technicals[c] = await loadTechnicals(c); }
       const { system, user } = buildAgentPrompt(signals, technicals);
 
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method:'POST',
-        headers:{
-          'Content-Type':'application/json',
-          'x-api-key': cfg.anthropicKey,
-          'anthropic-version':'2023-06-01',
-          'anthropic-dangerous-direct-browser-access':'true'
-        },
-        body: JSON.stringify({
-          model:'claude-sonnet-4-6',
-          max_tokens: 1000,
-          system: system,
-          messages:[{ role:'user', content: user }],
-          tools:[{ type:'web_search_20250305', name:'web_search' }]
-        })
-      });
-      const data = await res.json();
-      if(data.error){ throw new Error(data.error.message || 'Anthropic API error'); }
+      let newRecs;
+      let usedFallback = false;
+      try{
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{
+            'Content-Type':'application/json',
+            'x-api-key': cfg.anthropicKey,
+            'anthropic-version':'2023-06-01',
+            'anthropic-dangerous-direct-browser-access':'true'
+          },
+          body: JSON.stringify({
+            model:'claude-sonnet-4-6',
+            max_tokens: 1000,
+            system: system,
+            messages:[{ role:'user', content: user }],
+            tools:[{ type:'web_search_20250305', name:'web_search' }]
+          })
+        });
+        const data = await res.json();
+        if(data.error){ throw new Error(data.error.message || 'Anthropic API error'); }
 
-      const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
-      let raw = textBlocks.join('\n').trim().replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim();
-      let parsed;
-      try{ parsed = JSON.parse(raw); }
-      catch(e){ throw new Error('Could not parse agent response as JSON'); }
+        const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
+        let raw = textBlocks.join('\n').trim().replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim();
+        let parsed;
+        try{ parsed = JSON.parse(raw); }
+        catch(e){ throw new Error('Could not parse agent response as JSON'); }
+        newRecs = parsed.recommendations || [];
+      }catch(e){
+        log('Anthropic unavailable (' + e.message + ') — continuing with technicals-only ideas, no sentiment check this run', 'err');
+        newRecs = buildFallbackRecommendations(coins, technicals, cfg.maxPositionPct, cfg.maxStopLossPct, cfg.defaultTakeProfitPct);
+        usedFallback = true;
+      }
 
-      const newRecs = parsed.recommendations || [];
+      if(!usedFallback){
+        newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], cfg.maxStopLossPct, cfg.defaultTakeProfitPct));
+        newRecs.forEach(rec => { rec.source = 'manual'; });
+      } else {
+        newRecs.forEach(rec => { rec.source = 'manual-fallback'; });
+      }
+      newRecs.forEach(rec => { if(!rec.id) rec.id = rec.coin + '-' + Date.now() + '-' + Math.random().toString(36).slice(2,7); });
+
       recommendations = newRecs.concat(recommendations).slice(0, 10);
       renderRecommendations();
       lastFullScanTime = Date.now();
-      metaEl.textContent = 'Last scan: ' + new Date().toLocaleTimeString() + ' — ' + newRecs.length + ' idea(s) found across ' + coins.join(', ');
-      log('Agent scan complete: ' + newRecs.length + ' recommendation(s)', 'ok');
+      metaEl.textContent = 'Last scan: ' + new Date().toLocaleTimeString() + ' — ' + newRecs.length + ' idea(s) found across ' + coins.join(', ') + (usedFallback ? ' (technicals-only fallback)' : '');
+      log('Agent scan complete: ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (fallback mode)' : ''), 'ok');
       notifyNewRecommendations(newRecs);
     }catch(e){
       log('Agent scan failed: ' + e.message, 'err');
@@ -1156,7 +1393,7 @@
     if(typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const first = newRecs[0];
     const title = newRecs.length === 1 ? 'JARVIS: ' + first.coin + ' ' + first.direction + ' idea' : 'JARVIS: ' + newRecs.length + ' new trade ideas';
-    const body = newRecs.map(r => r.coin+' '+r.direction+' — '+(r.catalyst||'')).join('\n').slice(0,200);
+    const body = newRecs.map(r => r.coin+' '+r.direction+' — '+(r.pattern||'')).join('\n').slice(0,200);
     try{ new Notification(title, { body: body }); }catch(e){ /* ignore */ }
   }
 
@@ -1185,7 +1422,10 @@
     if(!recommendations.length){ el.innerHTML = '<div class="empty-state">No compelling setups found this scan.</div>'; return; }
     el.innerHTML = recommendations.map((r, i) => {
       const isLong = r.direction === 'long';
-      const sourceTag = r.source === 'backend' ? '<span class="conviction low" style="margin-left:4px;">via scan</span>' : '';
+      const isFallback = r.source === 'backend-fallback' || r.source === 'manual-fallback';
+      const sourceTag = isFallback
+        ? '<span class="conviction medium" style="margin-left:4px;">technicals only</span>'
+        : (r.source === 'backend' ? '<span class="conviction low" style="margin-left:4px;">via scan</span>' : '');
       const status = r.status || 'pending';
       const statusBadge = {
         executed: '<span class="conviction high" style="margin-left:4px;">executed via Telegram</span>',
@@ -1246,6 +1486,8 @@
   }
 
   function openConfirmModal(rec){
+    document.getElementById('executeStatusBox').style.display = 'none';
+    document.getElementById('placeConfirmedTrade').textContent = 'Confirm & Place Trade';
     document.getElementById('confirmTitle').textContent = rec.coin + ' — ' + (rec.direction === 'long' ? 'Long' : 'Short') + ' (' + (rec.conviction||'low') + ' conviction)';
     document.getElementById('confirmSub').textContent = rec.time_horizon || '';
     document.getElementById('confirmRationale').textContent =
@@ -1310,9 +1552,31 @@
     }
   }
 
+  function setExecuteStatus(msg, kind){
+    const box = document.getElementById('executeStatusBox');
+    box.style.display = 'block';
+    box.className = 'risk-check ' + (kind || '');
+    box.textContent = msg;
+  }
+
   async function executeConfirmedTrade(){
+    const statusBox = document.getElementById('executeStatusBox');
+    statusBox.style.display = 'none';
+    const btn = document.getElementById('placeConfirmedTrade');
     try{
-      await ensureSdk();
+      if(btn.disabled){
+        // Defensive: should never fire since disabled buttons don't dispatch clicks, but
+        // if it somehow does, don't silently do nothing — say why.
+        setExecuteStatus('⚠ Fix the issue above before confirming — see the risk check.', 'bad');
+        return;
+      }
+      if(!sdk){
+        setExecuteStatus('⚠ Not connected to Hyperliquid. Open Settings and connect your account first.', 'bad');
+        return;
+      }
+      btn.disabled = true; btn.textContent = 'Placing…';
+      setExecuteStatus('Placing order…', '');
+
       const coin = document.getElementById('confirmOverlay').dataset.coin;
       const recId = document.getElementById('confirmOverlay').dataset.recId;
       if(recId){
@@ -1321,8 +1585,8 @@
           const feed = await res.json();
           const latest = (feed.recommendations || []).find(r => r.id === recId);
           if(latest && latest.status && latest.status !== 'pending'){
-            log('This recommendation was already ' + latest.status + ' (via Telegram) — not placing a duplicate order.', 'err');
-            document.getElementById('confirmOverlay').classList.remove('open');
+            setExecuteStatus('This recommendation was already ' + latest.status + ' (via Telegram) — not placing a duplicate order.', 'bad');
+            log('Duplicate execution blocked: already ' + latest.status + ' via Telegram.', 'err');
             pollBackendFeed();
             return;
           }
@@ -1365,13 +1629,41 @@
       const result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
       log('Agent trade response: ' + JSON.stringify(result).slice(0,160), 'ok');
 
-      document.getElementById('confirmOverlay').classList.remove('open');
+      const apiError = result && result.response && result.response.data && result.response.data.statuses &&
+        result.response.data.statuses.find(s => s.error);
+      if(apiError){
+        setExecuteStatus('⚠ Exchange rejected the order: ' + apiError.error, 'bad');
+        return;
+      }
+
+      const labels = ['Entry','Stop-loss'].concat(takeProfit ? ['Take-profit'] : []);
+      const fillLines = describeOrderResult(result, labels).join(' · ');
+      await loadAccountState();
+      const acctLine = lastAccountValue != null ? ('Account value now ' + fmtUsd(lastAccountValue) + '.') : '';
+      setExecuteStatus('✓ ' + fillLines + '. ' + acctLine, 'ok');
+      setTimeout(()=>{ document.getElementById('confirmOverlay').classList.remove('open'); }, 2200);
       recommendations = recommendations.filter(r => r.coin !== coin);
       renderRecommendations();
-      loadAccountState();
     }catch(e){
+      setExecuteStatus('⚠ Order failed: ' + e.message, 'bad');
       log('Agent trade failed: ' + e.message, 'err');
+    }finally{
+      btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
     }
+  }
+
+  function describeOrderResult(result, labels){
+    try{
+      const statuses = result && result.response && result.response.data && result.response.data.statuses;
+      if(!Array.isArray(statuses)) return ['Order placed (response format not recognized)'];
+      return statuses.map((s, i) => {
+        const label = labels[i] || ('Order '+(i+1));
+        if(s.error) return label + ': ERROR — ' + s.error;
+        if(s.filled) return label + ': filled ' + s.filled.totalSz + ' @ $' + s.filled.avgPx;
+        if(s.resting) return label + ': resting (id ' + s.resting.oid + ')';
+        return label + ': ' + JSON.stringify(s);
+      });
+    }catch(e){ return ['Could not parse order result: ' + e.message]; }
   }
 
   // ---------------- Watchlist file upload ----------------
@@ -1641,12 +1933,25 @@
       loadCandles();
     });
 
-    document.querySelectorAll('.interval-btn').forEach(btn=>{
+    document.querySelectorAll('#intervalGroup .interval-btn').forEach(btn=>{
       btn.addEventListener('click', ()=>{
-        document.querySelectorAll('.interval-btn').forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('#intervalGroup .interval-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
         currentInterval = btn.dataset.i;
         loadCandles();
+      });
+    });
+
+    document.querySelectorAll('#chartModeGroup .interval-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=> setChartMode(btn.dataset.mode));
+    });
+
+    document.querySelectorAll('#portfolioPeriodGroup .interval-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        document.querySelectorAll('#portfolioPeriodGroup .interval-btn').forEach(b=>b.classList.remove('active'));
+        btn.classList.add('active');
+        portfolioPeriod = btn.dataset.p;
+        loadPortfolioChart();
       });
     });
 
@@ -1680,6 +1985,7 @@
 
     document.getElementById('scanBtn').addEventListener('click', ()=> runAgentScan());
     document.getElementById('pauseScanBtn').addEventListener('click', togglePauseScan);
+    document.getElementById('emergencyExitBtn').addEventListener('click', emergencyExitAll);
     document.getElementById('watchlistFile').addEventListener('change', (e)=>{
       if(e.target.files && e.target.files[0]) handleWatchlistFile(e.target.files[0]);
     });
