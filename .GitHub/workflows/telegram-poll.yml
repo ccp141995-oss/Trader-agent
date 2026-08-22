@@ -1,0 +1,53 @@
+name: Trade Agent Telegram Poller
+
+on:
+  schedule:
+    # Every 5 minutes — GitHub's practical minimum for reliable scheduling.
+    # Each run itself long-polls Telegram for ~4 minutes, so real response time
+    # is usually well under a minute while this workflow is "between" runs.
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: trade-agent-telegram-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: agent
+        run: npm install --omit=dev
+
+      - name: Poll Telegram and execute confirmed trades
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HL_AGENT_PRIVATE_KEY: ${{ secrets.HL_AGENT_PRIVATE_KEY }}
+          HL_ACCOUNT_ADDRESS: ${{ secrets.HL_ACCOUNT_ADDRESS }}
+          HL_EXEC_NETWORK: ${{ vars.HL_EXEC_NETWORK }}
+          MAX_POSITION_PCT: ${{ vars.MAX_POSITION_PCT }}
+          MAX_LEVERAGE: ${{ vars.MAX_LEVERAGE }}
+          EXECUTION_WINDOW_MIN: ${{ vars.EXECUTION_WINDOW_MIN }}
+        run: node agent/poll_telegram.js
+
+      - name: Commit updated feed and offset
+        run: |
+          git config user.name "jarvis-trade-agent"
+          git config user.email "actions@github.com"
+          git add docs/recommendations.json agent/telegram_offset.json
+          git diff --cached --quiet || git commit -m "Telegram poll update"
+          git pull --rebase
+          git push
