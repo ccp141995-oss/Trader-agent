@@ -13,7 +13,12 @@ const path = require('path');
 
 const HL_NETWORK = (process.env.HL_NETWORK || 'mainnet').toLowerCase();
 const INFO_URL = HL_NETWORK === 'testnet' ? 'https://api.hyperliquid-testnet.xyz/info' : 'https://api.hyperliquid.xyz/info';
-const WATCHLIST = (process.env.WATCHLIST || 'BTC,ETH,SOL,HYPE').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+const WATCHLIST_DEFAULT = (process.env.WATCHLIST || 'BTC,ETH,SOL,HYPE').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+let WATCHLIST = WATCHLIST_DEFAULT;
+let SCAN_MODE = (process.env.SCAN_MODE || 'watchlist').toLowerCase();
+let FILTERED_TOP_N = parseInt(process.env.FILTERED_TOP_N || '20', 10);
+let FILTERED_MIN_OI = parseFloat(process.env.FILTERED_MIN_OI || '1000000');
+let FILTERED_MIN_VOLUME_24H = parseFloat(process.env.FILTERED_MIN_VOLUME_24H || '2000000');
 const SENSITIVITY = (process.env.SIGNAL_SENSITIVITY || 'medium').toLowerCase();
 const INTERVAL_MIN = parseFloat(process.env.AUTO_SCAN_INTERVAL_MIN || '30');
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -27,6 +32,14 @@ function shortId(){
 
 const STATE_PATH = path.join(__dirname, 'state.json');
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
+const SHARED_CONFIG_PATH = path.join(__dirname, '..', 'docs', 'agent-config.json');
+
+function loadSharedConfig(){
+  const shared = readJson(SHARED_CONFIG_PATH, null);
+  if(!shared){ console.log('No agent-config.json from the dashboard yet — using repo Variable defaults.'); return null; }
+  console.log('Using dashboard-published config (last updated ' + (shared.updated_at || 'unknown') + ')');
+  return shared;
+}
 
 const SIGNAL_THRESHOLDS = {
   low:    { volRatio: 4.0, imbalance: 0.50 },
@@ -69,6 +82,146 @@ async function loadMarketContext(coins){
     });
   });
   return rows;
+}
+
+async function loadFilteredUniverse(){
+  const data = await infoPost({ type: 'metaAndAssetCtxs' });
+  const meta = data[0], ctxs = data[1];
+  const rows = [];
+  meta.universe.forEach((u, idx) => {
+    if(u.isDelisted) return;
+    const ctx = ctxs[idx];
+    if(!ctx) return;
+    const mark = parseFloat(ctx.markPx);
+    const oiNotional = parseFloat(ctx.openInterest) * mark;
+    const vol24h = parseFloat(ctx.dayNtlVlm);
+    if(oiNotional >= FILTERED_MIN_OI && vol24h >= FILTERED_MIN_VOLUME_24H){
+      rows.push({ coin: u.name, oiNotional, vol24h });
+    }
+  });
+  rows.sort((a,b) => b.vol24h - a.vol24h);
+  return rows.slice(0, FILTERED_TOP_N).map(r => r.coin);
+}
+
+async function resolveCoins(){
+  if(SCAN_MODE === 'filtered') return loadFilteredUniverse();
+  return WATCHLIST;
+}
+
+function sma(arr, period){
+  if(arr.length < period) return null;
+  const slice = arr.slice(-period);
+  return slice.reduce((a,b)=>a+b, 0) / period;
+}
+
+function stddev(arr, period){
+  const slice = arr.slice(-period);
+  if(slice.length < period) return null;
+  const mean = slice.reduce((a,b)=>a+b, 0) / period;
+  const variance = slice.reduce((a,b)=>a + (b-mean)*(b-mean), 0) / period;
+  return Math.sqrt(variance);
+}
+
+function emaSeries(arr, period){
+  const out = new Array(arr.length).fill(null);
+  if(arr.length < period) return out;
+  let prev = arr.slice(0, period).reduce((a,b)=>a+b, 0) / period;
+  out[period-1] = prev;
+  const k = 2 / (period + 1);
+  for(let i = period; i < arr.length; i++){
+    prev = arr[i]*k + prev*(1-k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+function computeRSI(closes, period){
+  if(closes.length < period+1) return null;
+  let gains = 0, losses = 0;
+  for(let i = closes.length - period; i < closes.length; i++){
+    const diff = closes[i] - closes[i-1];
+    if(diff >= 0) gains += diff; else losses -= diff;
+  }
+  const avgGain = gains/period, avgLoss = losses/period;
+  if(avgLoss === 0) return 100;
+  const rs = avgGain/avgLoss;
+  return 100 - (100/(1+rs));
+}
+
+function macdCalc(closes){
+  const ema12 = emaSeries(closes, 12);
+  const ema26 = emaSeries(closes, 26);
+  const macdLine = closes.map((_,i) => (ema12[i]!=null && ema26[i]!=null) ? ema12[i]-ema26[i] : null);
+  const macdValues = macdLine.filter(v => v != null);
+  const signalSeries = emaSeries(macdValues, 9);
+  const macd = macdValues.length ? macdValues[macdValues.length-1] : null;
+  const signal = signalSeries.length ? signalSeries[signalSeries.length-1] : null;
+  return { macd, signal, hist: (macd!=null && signal!=null) ? macd-signal : null };
+}
+
+function detectPatterns(opens, highs, lows, closes){
+  const n = closes.length;
+  if(n < 3) return [];
+  const patterns = [];
+  const o1=opens[n-1], c1=closes[n-1], h1=highs[n-1], l1=lows[n-1];
+  const o2=opens[n-2], c2=closes[n-2];
+  const body1 = Math.abs(c1-o1);
+  const range1 = (h1-l1) || 1e-9;
+  if(c2<o2 && c1>o1 && o1<=c2 && c1>=o2) patterns.push('bullish_engulfing');
+  if(c2>o2 && c1<o1 && o1>=c2 && c1<=o2) patterns.push('bearish_engulfing');
+  if(body1/range1 < 0.1) patterns.push('doji');
+  const upperWick1 = h1 - Math.max(o1,c1);
+  const lowerWick1 = Math.min(o1,c1) - l1;
+  if(lowerWick1 >= 2*body1 && upperWick1 <= body1*0.5 && body1/range1 < 0.4) patterns.push('hammer');
+  if(upperWick1 >= 2*body1 && lowerWick1 <= body1*0.5 && body1/range1 < 0.4) patterns.push('shooting_star');
+  return patterns;
+}
+
+async function loadTechnicals(coin){
+  try{
+    const endTime = Date.now();
+    const startTime = endTime - 15*60000*120; // ~120 x 15m candles, ~30h lookback
+    const candles = await infoPost({ type:'candleSnapshot', req:{ coin, interval:'15m', startTime, endTime } });
+    if(!candles || candles.length < 30) return null;
+    const opens = candles.map(c=>parseFloat(c.o));
+    const highs = candles.map(c=>parseFloat(c.h));
+    const lows = candles.map(c=>parseFloat(c.l));
+    const closes = candles.map(c=>parseFloat(c.c));
+    const vols = candles.map(c=>parseFloat(c.v));
+
+    const rsi14 = computeRSI(closes, 14);
+    const sma20 = sma(closes, 20);
+    const sma50 = sma(closes, 50);
+    const { macd, signal, hist } = macdCalc(closes);
+    const bbMid = sma20;
+    const bbSd = stddev(closes, 20);
+    const bbUpper = (bbMid!=null && bbSd!=null) ? bbMid + 2*bbSd : null;
+    const bbLower = (bbMid!=null && bbSd!=null) ? bbMid - 2*bbSd : null;
+    const volSma20 = sma(vols, 20);
+    const lastVol = vols[vols.length-1];
+    const patterns = detectPatterns(opens, highs, lows, closes);
+    const swingHigh = Math.max(...highs.slice(-50));
+    const swingLow = Math.min(...lows.slice(-50));
+
+    return {
+      lastClose: closes[closes.length-1], rsi14, sma20, sma50,
+      macd, macdSignal: signal, macdHist: hist,
+      bbUpper, bbMid, bbLower, volSma20, lastVol, patterns, swingHigh, swingLow
+    };
+  }catch(e){ console.error('Technicals failed for ' + coin + ':', e.message); return null; }
+}
+
+function formatTechnicalLine(coin, t){
+  if(!t) return coin + ': technical data unavailable';
+  const fmt = (v,d) => v==null ? 'n/a' : v.toFixed(d);
+  return coin + ': price $'+fmt(t.lastClose,2)+', RSI14 '+fmt(t.rsi14,1)
+    + ', SMA20 $'+fmt(t.sma20,2)+' / SMA50 $'+fmt(t.sma50,2)
+    + ', MACD '+fmt(t.macd,4)+' vs signal '+fmt(t.macdSignal,4)+' (hist '+fmt(t.macdHist,4)+')'
+    + ', Bollinger $'+fmt(t.bbLower,2)+'–$'+fmt(t.bbUpper,2)+' (mid $'+fmt(t.bbMid,2)+')'
+    + ', volume '+fmt(t.lastVol,0)+' vs 20-bar avg '+fmt(t.volSma20,0)
+    + ', 50-bar range $'+fmt(t.swingLow,2)+'–$'+fmt(t.swingHigh,2)
+    + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none detected')
+    + ' (15m candles)';
 }
 
 async function loadOrderBookSignal(coin){
@@ -115,32 +268,37 @@ function findTrippedCoins(signals){
   return Object.values(signals).filter(s => s.volRatio >= t.volRatio || Math.abs(s.imbalance) >= t.imbalance).map(s => s.coin);
 }
 
-function buildAgentPrompt(signals){
+function buildAgentPrompt(signals, technicals){
+  const techTable = Object.keys(technicals).map(coin => formatTechnicalLine(coin, technicals[coin])).join('\n');
   const rows = Object.values(signals);
-  const table = rows.map(r =>
-    r.coin+': mark $'+r.markPx.toFixed(2)+', 24h '+(r.chg24hPct>=0?'+':'')+r.chg24hPct.toFixed(2)+'%, '
-    + 'funding '+(r.funding*100).toFixed(4)+'%/8h, OI '+Math.round(r.openInterest)+', '
+  const supportTable = rows.map(r =>
+    r.coin+': funding '+(r.funding*100).toFixed(4)+'%/8h, OI '+Math.round(r.openInterest)+', '
     + 'order-book imbalance '+(r.imbalance*100).toFixed(1)+'% ('+(r.imbalance>0?'bid-heavy':'ask-heavy')+'), '
     + 'spread '+(r.spreadPct!=null? r.spreadPct.toFixed(3)+'%':'n/a')+', '
     + '5m volume vs trailing avg '+r.volRatio.toFixed(2)+'x'
   ).join('\n');
 
-  const system = "You are JARVIS's trading research sub-agent for a Hyperliquid perpetuals account. "
-    + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses — "
-    + "with an early, near-term catalyst. Research using social media sentiment (X/Twitter, Reddit, crypto forums), recent economic and geopolitical "
-    + "news, and company/industry/sector news and trends. You have web search — use it. Combine what you find with the funding, open-interest, "
-    + "order-book imbalance and volume-spike readings provided below; a volume spike or heavy book imbalance alongside a real news/sentiment catalyst "
-    + "is a stronger signal than either alone, but do not recommend a trade on technical signals alone with no identifiable catalyst. "
+  const system = "You are JARVIS's trading research sub-agent for a Hyperliquid perpetuals account, acting as a master chart technician. "
+    + "Your PRIMARY basis for every recommendation must be technical analysis: candlestick chart patterns, confirmed by volume, and agreement from "
+    + "popular indicators (RSI, MACD, Bollinger Bands, moving averages) — all computed for you below from real 15-minute candle data. Only recommend "
+    + "a trade when the technical picture is genuinely compelling: a real pattern, confirmed by volume, with at least one indicator in agreement — "
+    + "not a single signal in isolation, and never a trade with no identifiable pattern or indicator confluence. "
+    + "After forming your technical view, do ONE quick supplementary web search per candidate for sentiment and social buzz (X/Twitter, Reddit, "
+    + "crypto forums) and recent news — use this only to confirm or flag a conflict with the technical picture, never as the primary reason for a trade. "
+    + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
     + "You NEVER place trades yourself; you only propose them for human review. "
-    + "Return at most 3 ideas — only ones with genuine quick-turnaround conviction; return fewer or none if nothing qualifies. "
-    + "Every idea MUST include a concrete stop_loss_price. Be concise: rationale <= 35 words, catalyst <= 15 words. "
+    + "Return at most 3 ideas — only ones with genuine technical conviction; return fewer or none if nothing qualifies. "
+    + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing). "
+    + "Be concise: rationale <= 35 words, sentiment_note <= 20 words. "
     + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
     + '{"recommendations":[{"coin":string,"direction":"long"|"short","conviction":"low"|"medium"|"high",'
-    + '"catalyst":string,"rationale":string,"time_horizon":string,"entry_price":number,"stop_loss_price":number,'
-    + '"take_profit_price":number|null,"suggested_size_pct_equity":number,"suggested_leverage":number,"risk_flags":[string]}]}';
+    + '"pattern":string,"indicators_confirming":[string],"sentiment_note":string,"rationale":string,"time_horizon":string,'
+    + '"entry_price":number,"stop_loss_price":number,"take_profit_price":number|null,'
+    + '"suggested_size_pct_equity":number,"suggested_leverage":number,"risk_flags":[string]}]}';
 
-  const user = "Watchlist market + order-book + volume context (coins that tripped a signal threshold):\n" + table
-    + "\n\nFind the best quick-turnaround opportunities right now among these coins (or state none if nothing compelling).";
+  const user = "Technical readout (primary evidence):\n" + techTable
+    + "\n\nSupporting market data (funding/OI/book/volume):\n" + supportTable
+    + "\n\nFind the best technically-confirmed, quick-turnaround opportunities right now among these coins (or state none if the technical picture isn't compelling for any of them).";
   return { system, user };
 }
 
@@ -188,9 +346,12 @@ async function sendTelegram(text, replyMarkup){
 function formatTelegramMessage(rec){
   const dir = rec.direction === 'short' ? 'SHORT' : 'LONG';
   const flags = (rec.risk_flags || []).length ? '\n⚠ ' + rec.risk_flags.join(', ') : '';
+  const confirming = (rec.indicators_confirming || []).length ? rec.indicators_confirming.join(', ') : '—';
   return `*JARVIS Trade Agent* — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction)\n`
-    + `Catalyst: ${rec.catalyst || '—'}\n`
+    + `Pattern: ${rec.pattern || '—'}\n`
+    + `Confirming: ${confirming}\n`
     + `Why: ${rec.rationale || '—'}\n`
+    + (rec.sentiment_note ? `Sentiment check: ${rec.sentiment_note}\n` : '')
     + `Horizon: ${rec.time_horizon || '—'}\n`
     + `Entry ~$${rec.entry_price} · Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : '') + `\n`
     + `Sized at ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (capped by your configured limits at execution)${flags}\n`
@@ -199,7 +360,22 @@ function formatTelegramMessage(rec){
 
 async function main(){
   if(!ANTHROPIC_API_KEY){ console.log('No ANTHROPIC_API_KEY set, exiting.'); return; }
-  if(!WATCHLIST.length){ console.log('Empty watchlist, exiting.'); return; }
+
+  const shared = loadSharedConfig();
+  if(shared && shared.paused){
+    console.log('Scanner is paused via the dashboard. Skipping this run.');
+    return;
+  }
+  if(shared){
+    if(shared.watchlist) WATCHLIST = shared.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+    if(shared.scanMode) SCAN_MODE = shared.scanMode;
+    if(shared.filteredTopN) FILTERED_TOP_N = parseInt(shared.filteredTopN, 10);
+    if(shared.filteredMinOI) FILTERED_MIN_OI = parseFloat(shared.filteredMinOI);
+    if(shared.filteredMinVolume24h) FILTERED_MIN_VOLUME_24H = parseFloat(shared.filteredMinVolume24h);
+  }
+
+  const allCoins = await resolveCoins();
+  if(!allCoins.length){ console.log('No coins resolved (empty watchlist, or filtered-universe thresholds too strict), exiting.'); return; }
 
   const state = readJson(STATE_PATH, { lastFullScanTime: 0, recentIds: [] });
   const feed = readJson(FEED_PATH, { recommendations: [] });
@@ -213,8 +389,8 @@ async function main(){
     return;
   }
 
-  console.log('Checking signals for: ' + WATCHLIST.join(', '));
-  const signals = await loadSignals(WATCHLIST);
+  console.log(`Checking signals (${SCAN_MODE} mode) for: ` + allCoins.join(', '));
+  const signals = await loadSignals(allCoins);
   const tripped = findTrippedCoins(signals);
 
   let scanCoins = null;
@@ -222,8 +398,8 @@ async function main(){
     console.log('Signal tripped on: ' + tripped.join(', '));
     scanCoins = tripped;
   } else if(sinceLastScan >= maxGapMs){
-    console.log('No signal tripped, running scheduled safety-net scan across full watchlist.');
-    scanCoins = WATCHLIST;
+    console.log('No signal tripped, running scheduled safety-net scan across full set.');
+    scanCoins = allCoins;
   } else {
     console.log('No signal tripped, within safety-net window. Nothing to do.');
     return;
@@ -231,7 +407,12 @@ async function main(){
 
   const subsetSignals = {};
   scanCoins.forEach(c => { if(signals[c]) subsetSignals[c] = signals[c]; });
-  const { system, user } = buildAgentPrompt(subsetSignals);
+
+  console.log('Computing technical readout (candlestick patterns, RSI, MACD, Bollinger, volume) for: ' + scanCoins.join(', '));
+  const technicals = {};
+  for(const c of scanCoins){ technicals[c] = await loadTechnicals(c); }
+
+  const { system, user } = buildAgentPrompt(subsetSignals, technicals);
 
   console.log('Calling Anthropic for research on: ' + scanCoins.join(', '));
   const parsed = await callAnthropic(system, user);

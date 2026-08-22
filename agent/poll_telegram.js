@@ -16,18 +16,32 @@ const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '');
 const HL_EXEC_NETWORK = (process.env.HL_EXEC_NETWORK || 'testnet').toLowerCase(); // testnet by default, on purpose
 const HL_AGENT_PRIVATE_KEY = process.env.HL_AGENT_PRIVATE_KEY;
 const HL_ACCOUNT_ADDRESS = process.env.HL_ACCOUNT_ADDRESS;
-const MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
-const MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
+const MAX_POSITION_PCT_DEFAULT = parseFloat(process.env.MAX_POSITION_PCT || '5');
+const MAX_LEVERAGE_DEFAULT = parseFloat(process.env.MAX_LEVERAGE || '3');
+const DEFAULT_TAKE_PROFIT_PCT_DEFAULT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
+let MAX_POSITION_PCT = MAX_POSITION_PCT_DEFAULT;
+let MAX_LEVERAGE = MAX_LEVERAGE_DEFAULT;
+let DEFAULT_TAKE_PROFIT_PCT = DEFAULT_TAKE_PROFIT_PCT_DEFAULT;
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
 const MAX_PRICE_DRIFT_PCT = 2.5; // abort if price moved more than this since the recommendation was made
 
 const INFO_URL = HL_EXEC_NETWORK === 'mainnet' ? 'https://api.hyperliquid.xyz/info' : 'https://api.hyperliquid-testnet.xyz/info';
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
 const OFFSET_PATH = path.join(__dirname, 'telegram_offset.json');
+const SHARED_CONFIG_PATH = path.join(__dirname, '..', 'docs', 'agent-config.json');
 const POLL_BUDGET_MS = 4 * 60 * 1000; // stay comfortably under the 5-minute schedule
 
 function readJson(p, fallback){ try{ return JSON.parse(fs.readFileSync(p, 'utf8')); }catch(e){ return fallback; } }
 function writeJson(p, obj){ fs.writeFileSync(p, JSON.stringify(obj, null, 2)); }
+
+function loadSharedConfig(){
+  const shared = readJson(SHARED_CONFIG_PATH, null);
+  if(!shared) return;
+  if(shared.maxPositionPct) MAX_POSITION_PCT = parseFloat(shared.maxPositionPct);
+  if(shared.maxLeverage) MAX_LEVERAGE = parseFloat(shared.maxLeverage);
+  if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
+  console.log(`Using dashboard-published risk config: max ${MAX_POSITION_PCT}% equity, ${MAX_LEVERAGE}x leverage, ${DEFAULT_TAKE_PROFIT_PCT}% default TP (updated ${shared.updated_at || 'unknown'})`);
+}
 
 async function tg(method, body){
   const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, {
@@ -110,6 +124,15 @@ async function executeTrade(rec){
       limit_px: parseFloat(rec.take_profit_price.toFixed(2)),
       order_type: { trigger: { isMarket: true, triggerPx: rec.take_profit_price.toFixed(2), tpsl: 'tp' } }, reduce_only: true
     });
+  } else if(DEFAULT_TAKE_PROFIT_PCT){
+    const mult = 1 + (DEFAULT_TAKE_PROFIT_PCT/100) * (isBuy ? 1 : -1);
+    const tpPx = parseFloat((currentMid * mult).toFixed(2));
+    orders.push({
+      coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
+      limit_px: tpPx,
+      order_type: { trigger: { isMarket: true, triggerPx: tpPx.toFixed(2), tpsl: 'tp' } }, reduce_only: true
+    });
+    rec.take_profit_price = tpPx;
   }
 
   const sdk = new Hyperliquid({
@@ -186,6 +209,7 @@ async function sweepExpired(feed){
 
 async function main(){
   if(!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID){ console.log('Telegram not configured, exiting.'); return; }
+  loadSharedConfig();
 
   let offsetState = readJson(OFFSET_PATH, { offset: 0 });
   const feed = readJson(FEED_PATH, { recommendations: [] });
