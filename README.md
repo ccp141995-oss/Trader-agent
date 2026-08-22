@@ -71,7 +71,7 @@ Not secret, just config — you can change these anytime without touching code.
 | `FILTERED_MIN_VOLUME_24H` | `2000000` | Only used in filtered mode — minimum 24h volume (USD) to be eligible |
 | `HL_NETWORK` | `mainnet` | Signal data should come from mainnet even if you execute on testnet — testnet volume isn't real |
 | `HL_EXEC_NETWORK` | `testnet` | **Where trades actually execute.** Change to `mainnet` only when you're ready to risk real funds |
-| `AUTO_SCAN_INTERVAL_MIN` | `30` | Minimum minutes between full (paid) research scans |
+| `AUTO_SCAN_INTERVAL_MIN` | `30` | Minimum minutes between research scans — a cooldown floor, not a schedule. If nothing trips a signal, no scan happens at all, no matter how much time passes |
 | `SIGNAL_SENSITIVITY` | `medium` | `low` / `medium` / `high` — how easily a volume spike or book imbalance triggers a scan |
 | `MAX_POSITION_PCT` | `5` | Hard cap on position size as % of equity — should match your dashboard setting |
 | `MAX_LEVERAGE` | `3` | Hard cap on leverage — should match your dashboard setting |
