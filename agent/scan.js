@@ -26,6 +26,9 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
 let MAX_STOP_LOSS_PCT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
+let MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
+let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
+let DEFAULT_TAKE_PROFIT_PCT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
 
 function shortId(){
   return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -304,6 +307,113 @@ function buildAgentPrompt(signals, technicals){
   return { system, user };
 }
 
+// ---------------- Risk-level resolution (AI value -> technical calc -> settings fallback) ----------------
+function resolveRiskLevels(rec, technicals, maxStopLossPct, defaultTakeProfitPct){
+  const isLong = rec.direction !== 'short';
+  const entry = rec.entry_price;
+  const t = technicals;
+  const notes = [];
+
+  // --- Stop-loss ---
+  let stop = rec.stop_loss_price;
+  let stopValid = stop && isFinite(stop) && stop > 0 && (isLong ? stop < entry : stop > entry);
+  let stopDistPct = stopValid ? Math.abs(entry - stop) / entry * 100 : null;
+
+  if(stopValid && stopDistPct <= maxStopLossPct){
+    notes.push('stop: AI-suggested');
+  } else if(t && t.swingLow != null && t.swingHigh != null){
+    const bandWidth = (t.bbUpper != null && t.bbLower != null) ? (t.bbUpper - t.bbLower) : (entry * 0.01);
+    const buffer = bandWidth * 0.1;
+    const swingStop = isLong ? (t.swingLow - buffer) : (t.swingHigh + buffer);
+    const swingDistPct = Math.abs(entry - swingStop) / entry * 100;
+    if(swingStop > 0 && swingDistPct > 0 && swingDistPct <= maxStopLossPct){
+      stop = swingStop; stopDistPct = swingDistPct;
+      notes.push(stopValid ? 'stop: AI value exceeded max distance, replaced with swing-based technical stop' : 'stop: technical swing-based (no valid AI value)');
+    } else {
+      stop = isLong ? entry * (1 - maxStopLossPct/100) : entry * (1 + maxStopLossPct/100);
+      stopDistPct = maxStopLossPct;
+      notes.push('stop: capped at max stop-loss distance setting (technical/AI stop was out of range)');
+    }
+  } else {
+    stop = isLong ? entry * (1 - maxStopLossPct/100) : entry * (1 + maxStopLossPct/100);
+    stopDistPct = maxStopLossPct;
+    notes.push('stop: capped at max stop-loss distance setting (no technicals or AI value available)');
+  }
+
+  // --- Take-profit ---
+  let tp = rec.take_profit_price;
+  const tpValid = tp && isFinite(tp) && tp > 0 && (isLong ? tp > entry : tp < entry);
+
+  if(tpValid){
+    notes.push('target: AI-suggested');
+  } else {
+    // technically-driven: reward:risk of 1.5x the resolved stop distance
+    const rrTarget = isLong ? entry * (1 + (stopDistPct*1.5)/100) : entry * (1 - (stopDistPct*1.5)/100);
+    if(rrTarget > 0){
+      tp = rrTarget;
+      notes.push('target: 1.5x risk:reward from resolved stop (no valid AI target)');
+    } else {
+      tp = isLong ? entry * (1 + defaultTakeProfitPct/100) : entry * (1 - defaultTakeProfitPct/100);
+      notes.push('target: default take-profit % setting (fallback)');
+    }
+  }
+
+  rec.stop_loss_price = parseFloat(stop.toFixed(2));
+  rec.take_profit_price = parseFloat(tp.toFixed(2));
+  rec.risk_flags = (rec.risk_flags || []).concat(notes.filter(n => !n.includes('AI-suggested')));
+  return rec;
+}
+
+// ---------------- Technicals-only fallback (used when Anthropic is unavailable, e.g. low credits) ----------------
+function technicalOnlySignal(t){
+  if(!t) return null;
+  const bullPatterns = ['bullish_engulfing','hammer'];
+  const bearPatterns = ['bearish_engulfing','shooting_star'];
+  const hasBull = t.patterns.some(p => bullPatterns.includes(p));
+  const hasBear = t.patterns.some(p => bearPatterns.includes(p));
+  const macdBull = t.macdHist != null && t.macdHist > 0;
+  const macdBear = t.macdHist != null && t.macdHist < 0;
+  const nearLowerBand = t.bbLower != null && t.lastClose <= t.bbLower * 1.01;
+  const nearUpperBand = t.bbUpper != null && t.lastClose >= t.bbUpper * 0.99;
+  const rsiOversold = t.rsi14 != null && t.rsi14 < 35;
+  const rsiOverbought = t.rsi14 != null && t.rsi14 > 65;
+
+  const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold'].filter(Boolean);
+  const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought'].filter(Boolean);
+
+  if(bullFactors.length >= 2 && bullFactors.length > bearFactors.length){
+    return { direction: 'long', confirming: bullFactors, pattern: t.patterns.filter(p=>bullPatterns.includes(p)).join(', ') || 'momentum confluence (no single candle pattern)' };
+  }
+  if(bearFactors.length >= 2 && bearFactors.length > bullFactors.length){
+    return { direction: 'short', confirming: bearFactors, pattern: t.patterns.filter(p=>bearPatterns.includes(p)).join(', ') || 'momentum confluence (no single candle pattern)' };
+  }
+  return null;
+}
+
+function buildFallbackRecommendations(scanCoins, technicals, maxPositionPct, maxLeverage, maxStopLossPct, defaultTakeProfitPct){
+  const recs = [];
+  for(const coin of scanCoins){
+    const t = technicals[coin];
+    const signal = technicalOnlySignal(t);
+    if(!signal) continue;
+    let rec = {
+      coin, direction: signal.direction, conviction: 'low',
+      pattern: signal.pattern, indicators_confirming: signal.confirming,
+      sentiment_note: 'Not available — Anthropic was unreachable (likely low credits), so this idea is technicals-only with no sentiment/news check.',
+      rationale: 'Technical confluence only: ' + signal.confirming.join(', ') + '. No AI research performed.',
+      time_horizon: 'Short-term (technical fallback)',
+      entry_price: t.lastClose,
+      stop_loss_price: null, take_profit_price: null,
+      suggested_size_pct_equity: Math.max(1, Math.round((maxPositionPct/2) * 10) / 10),
+      suggested_leverage: 1,
+      risk_flags: ['technicals-only fallback — no sentiment/news confirmation']
+    };
+    rec = resolveRiskLevels(rec, t, maxStopLossPct, defaultTakeProfitPct);
+    recs.push(rec);
+  }
+  return recs.slice(0, 3);
+}
+
 async function callAnthropic(system, user){
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -327,29 +437,44 @@ async function callAnthropic(system, user){
   return JSON.parse(raw);
 }
 
-async function sendTelegram(text, replyMarkup){
+async function sendTelegram(text, replyMarkup, attempt){
+  attempt = attempt || 1;
   if(!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID){
     console.log('Telegram not configured, skipping send. Message would have been:\n' + text);
     return null;
   }
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  const body = { chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'Markdown', disable_web_page_preview: true };
+  // No parse_mode: AI-generated or error text can contain *, _, ` characters that break Telegram's
+  // Markdown parser and silently fail the whole send. Plain text is slightly less pretty but never
+  // fails to deliver because of formatting.
+  const body = { chat_id: TELEGRAM_CHAT_ID, text, disable_web_page_preview: true };
   if(replyMarkup) body.reply_markup = replyMarkup;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  const data = await res.json();
-  if(!res.ok || !data.ok){ console.error('Telegram send failed:', data.description || res.status); return null; }
-  return data.result.message_id;
+  try{
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(!res.ok || !data.ok){
+      console.error('Telegram send failed:', data.description || res.status);
+      if(attempt < 2){ await new Promise(r=>setTimeout(r,1000)); return sendTelegram(text, replyMarkup, attempt+1); }
+      return null;
+    }
+    return data.result.message_id;
+  }catch(e){
+    console.error('Telegram send threw:', e.message);
+    if(attempt < 2){ await new Promise(r=>setTimeout(r,1000)); return sendTelegram(text, replyMarkup, attempt+1); }
+    return null;
+  }
 }
 
 function formatTelegramMessage(rec){
   const dir = rec.direction === 'short' ? 'SHORT' : 'LONG';
   const flags = (rec.risk_flags || []).length ? '\n⚠ ' + rec.risk_flags.join(', ') : '';
   const confirming = (rec.indicators_confirming || []).length ? rec.indicators_confirming.join(', ') : '—';
-  return `*JARVIS Trade Agent* — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction)\n`
+  const fallbackNote = rec.source === 'backend-fallback' ? '\n🔧 Technicals-only mode — Anthropic was unavailable, no sentiment/news check was done.' : '';
+  return `🤖 JARVIS Trade Agent — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction)${fallbackNote}\n`
     + `Pattern: ${rec.pattern || '—'}\n`
     + `Confirming: ${confirming}\n`
     + `Why: ${rec.rationale || '—'}\n`
@@ -375,6 +500,9 @@ async function main(){
     if(shared.filteredMinOI) FILTERED_MIN_OI = parseFloat(shared.filteredMinOI);
     if(shared.filteredMinVolume24h) FILTERED_MIN_VOLUME_24H = parseFloat(shared.filteredMinVolume24h);
     if(shared.maxStopLossPct) MAX_STOP_LOSS_PCT = parseFloat(shared.maxStopLossPct);
+    if(shared.maxPositionPct) MAX_POSITION_PCT = parseFloat(shared.maxPositionPct);
+    if(shared.maxLeverage) MAX_LEVERAGE = parseFloat(shared.maxLeverage);
+    if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
   }
 
   const allCoins = await resolveCoins();
@@ -412,9 +540,22 @@ async function main(){
   const { system, user } = buildAgentPrompt(subsetSignals, technicals);
 
   console.log('Calling Anthropic for research on: ' + scanCoins.join(', '));
-  const parsed = await callAnthropic(system, user);
-  const newRecs = parsed.recommendations || [];
-  console.log('Got ' + newRecs.length + ' recommendation(s).');
+  let newRecs;
+  let usedFallback = false;
+  try{
+    const parsed = await callAnthropic(system, user);
+    newRecs = parsed.recommendations || [];
+  }catch(e){
+    console.error('Anthropic call failed: ' + e.message);
+    console.log('Continuing with technicals-only fallback (no sentiment/news check this run).');
+    newRecs = buildFallbackRecommendations(scanCoins, technicals, MAX_POSITION_PCT, MAX_LEVERAGE, MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT);
+    usedFallback = true;
+  }
+  console.log('Got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only fallback)' : '') + '.');
+
+  if(!usedFallback){
+    newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT));
+  }
 
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + EXECUTION_WINDOW_MIN * 60000).toISOString();
@@ -422,7 +563,7 @@ async function main(){
     rec.id = shortId();
     rec.generated_at = now;
     rec.expires_at = expiresAt;
-    rec.source = 'backend';
+    rec.source = usedFallback ? 'backend-fallback' : 'backend';
     rec.status = 'pending';
     const replyMarkup = {
       inline_keyboard: [[
@@ -434,6 +575,8 @@ async function main(){
     if(messageId){
       rec.telegram_message_id = messageId;
       rec.telegram_chat_id = TELEGRAM_CHAT_ID;
+    } else {
+      console.error(`Failed to send Telegram message for ${rec.coin} after retry — this recommendation will still appear in the dashboard, but no confirm/deny buttons went out.`);
     }
   }
 

@@ -46,11 +46,20 @@ function loadSharedConfig(){
   console.log(`Using dashboard-published risk config: max ${MAX_POSITION_PCT}% equity, ${MAX_LEVERAGE}x leverage, ${DEFAULT_TAKE_PROFIT_PCT}% default TP, ${MAX_STOP_LOSS_PCT}% max stop distance (updated ${shared.updated_at || 'unknown'})`);
 }
 
-async function tg(method, body){
-  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-  });
-  return res.json();
+async function tg(method, body, attempt){
+  attempt = attempt || 1;
+  try{
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(!data.ok) console.error(`Telegram ${method} returned not-ok:`, data.description);
+    return data;
+  }catch(e){
+    console.error(`Telegram ${method} threw:`, e.message);
+    if(attempt < 2){ await new Promise(r=>setTimeout(r,1000)); return tg(method, body, attempt+1); }
+    return { ok: false, description: e.message };
+  }
 }
 
 async function infoPost(body){
@@ -62,15 +71,19 @@ async function infoPost(body){
 function findRec(feed, id){ return (feed.recommendations || []).find(r => r.id === id); }
 
 async function editStatusMessage(rec, text){
-  if(!rec.telegram_message_id) return;
-  try{
-    await tg('editMessageText', {
-      chat_id: rec.telegram_chat_id || TELEGRAM_CHAT_ID,
+  const chatId = rec.telegram_chat_id || TELEGRAM_CHAT_ID;
+  if(rec.telegram_message_id){
+    const result = await tg('editMessageText', {
+      chat_id: chatId,
       message_id: rec.telegram_message_id,
-      text,
-      parse_mode: 'Markdown'
+      text
     });
-  }catch(e){ console.error('Failed to edit Telegram message:', e.message); }
+    if(result.ok) return;
+    console.error('Edit failed, sending a fresh message instead:', result.description);
+  }
+  // No message id, or the edit itself failed (message too old, deleted, etc.) — never let the
+  // update go silently missing. Send it as a brand new message instead.
+  await tg('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true });
 }
 
 async function getCurrentMid(coin){
@@ -82,6 +95,42 @@ async function getAccountEquity(){
   if(!HL_ACCOUNT_ADDRESS) return null;
   const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
   return parseFloat((state.marginSummary || {}).accountValue) || null;
+}
+
+async function getAccountSnapshot(){
+  if(!HL_ACCOUNT_ADDRESS) return 'Account address not configured.';
+  try{
+    const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
+    const ms = state.marginSummary || {};
+    const openPositions = (state.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0).length;
+    const accountValue = parseFloat(ms.accountValue);
+    const marginUsed = parseFloat(ms.totalMarginUsed);
+    const withdrawable = parseFloat(state.withdrawable);
+    return `Account value $${isFinite(accountValue)?accountValue.toFixed(2):'n/a'}, `
+      + `margin used $${isFinite(marginUsed)?marginUsed.toFixed(2):'n/a'}, `
+      + `withdrawable $${isFinite(withdrawable)?withdrawable.toFixed(2):'n/a'}, `
+      + `${openPositions} open position(s)`;
+  }catch(e){
+    return 'Could not fetch account stats: ' + e.message;
+  }
+}
+
+function describeOrderResult(result, labels){
+  try{
+    const statuses = result && result.response && result.response.data && result.response.data.statuses;
+    if(!Array.isArray(statuses)){
+      return ['Order response format not recognized — raw: ' + JSON.stringify(result).slice(0,200)];
+    }
+    return statuses.map((s, i) => {
+      const label = labels[i] || ('Order ' + (i+1));
+      if(s.error) return label + ': ERROR — ' + s.error;
+      if(s.filled) return label + ': FILLED ' + s.filled.totalSz + ' @ $' + s.filled.avgPx;
+      if(s.resting) return label + ': resting (order id ' + s.resting.oid + ')';
+      return label + ': ' + JSON.stringify(s);
+    });
+  }catch(e){
+    return ['Could not parse order result: ' + e.message];
+  }
 }
 
 async function executeTrade(rec){
@@ -157,51 +206,77 @@ async function executeTrade(rec){
 async function handleCallback(cb, feed){
   const fromId = String(cb.from && cb.from.id);
   const [action, id] = String(cb.data || '').split(':');
+  let rec = null;
 
-  if(fromId !== TELEGRAM_CHAT_ID){
-    console.warn('Ignoring callback from unauthorized chat id:', fromId);
-    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Not authorized.', show_alert: true });
-    return;
-  }
-
-  const rec = findRec(feed, id);
-  if(!rec || rec.status !== 'pending'){
-    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Already handled or expired.' });
-    return;
-  }
-
-  if(Date.now() > new Date(rec.expires_at).getTime()){
-    rec.status = 'expired';
-    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'This recommendation has expired.' });
-    await editStatusMessage(rec, `⏰ *${rec.coin} ${rec.direction}* — expired before you responded.`);
-    return;
-  }
-
-  if(action === 'deny'){
-    rec.status = 'denied';
-    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Denied.' });
-    await editStatusMessage(rec, `❌ *${rec.coin} ${rec.direction}* — denied.`);
-    return;
-  }
-
-  if(action === 'confirm'){
-    rec.status = 'processing';
-    await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Executing…' });
-    await editStatusMessage(rec, `⏳ *${rec.coin} ${rec.direction}* — confirmed, placing order…`);
-    try{
-      const { size, entryPx, leverage, pctEquity } = await executeTrade(rec);
-      rec.status = 'executed';
-      rec.executed_at = new Date().toISOString();
-      await editStatusMessage(rec,
-        `✅ *${rec.coin} ${rec.direction}* — executed on ${HL_EXEC_NETWORK}.\n` +
-        `Size ${size.toFixed(5)} @ ~$${entryPx.toFixed(2)}, ${leverage}x, ${pctEquity.toFixed(1)}% of equity.\n` +
-        `Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : '') + `.`
-      );
-    }catch(e){
-      rec.status = 'failed';
-      rec.error = e.message;
-      await editStatusMessage(rec, `⚠ *${rec.coin} ${rec.direction}* — execution failed: ${e.message}`);
+  try{
+    if(fromId !== TELEGRAM_CHAT_ID){
+      console.warn('Ignoring callback from unauthorized chat id:', fromId);
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Not authorized.', show_alert: true });
+      return;
     }
+
+    rec = findRec(feed, id);
+    if(!rec || rec.status !== 'pending'){
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Already handled or expired.' });
+      return;
+    }
+
+    if(Date.now() > new Date(rec.expires_at).getTime()){
+      rec.status = 'expired';
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'This recommendation has expired.' });
+      await editStatusMessage(rec, `⏰ ${rec.coin} ${rec.direction} — expired before you responded.`);
+      return;
+    }
+
+    if(action === 'deny'){
+      rec.status = 'denied';
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Denied.' });
+      await editStatusMessage(rec, `❌ ${rec.coin} ${rec.direction} — denied.`);
+      return;
+    }
+
+    if(action === 'confirm'){
+      rec.status = 'processing';
+      // Acknowledge immediately so a tap is never left wondering whether it registered —
+      // execution (price re-check, sizing, the actual order) happens after this.
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Got it — checking price and risk limits…' });
+      await editStatusMessage(rec, `⏳ ${rec.coin} ${rec.direction} — confirmed, checking current price and risk limits before placing…`);
+
+      try{
+        const { size, entryPx, leverage, pctEquity, result } = await executeTrade(rec);
+        rec.status = 'executed';
+        rec.executed_at = new Date().toISOString();
+
+        const labels = ['Entry', 'Stop-loss'].concat(rec.take_profit_price ? ['Take-profit'] : []);
+        const fillLines = describeOrderResult(result, labels).join('\n');
+        const snapshot = await getAccountSnapshot();
+
+        await editStatusMessage(rec,
+          `✅ ${rec.coin} ${rec.direction} — executed on ${HL_EXEC_NETWORK}.\n`
+          + `Target size ${size.toFixed(5)} @ ~$${entryPx.toFixed(2)}, ${leverage}x, ${pctEquity.toFixed(1)}% of equity.\n\n`
+          + `Order status:\n${fillLines}\n\n`
+          + `Account: ${snapshot}`
+        );
+      }catch(e){
+        rec.status = 'failed';
+        rec.error = e.message;
+        const snapshot = await getAccountSnapshot();
+        await editStatusMessage(rec,
+          `⚠ ${rec.coin} ${rec.direction} — execution failed: ${e.message}\n\n`
+          + `Account (unchanged): ${snapshot}`
+        );
+      }
+    }
+  }catch(outerErr){
+    // Last-resort safety net: whatever went wrong, however unexpected, the person should never
+    // see silence. Report it as a brand-new message rather than risk another failed edit.
+    console.error('Unhandled error in handleCallback:', outerErr.message);
+    try{
+      await tg('sendMessage', {
+        chat_id: TELEGRAM_CHAT_ID,
+        text: `⚠ Something went wrong processing your ${action || 'response'} for recommendation ${id || '(unknown)'}: ${outerErr.message}\n\nCheck the "Trade Agent Telegram Poller" workflow logs on GitHub for details. No trade was placed if this happened before order submission.`
+      });
+    }catch(e2){ console.error('Even the fallback error message failed to send:', e2.message); }
   }
 }
 
@@ -210,7 +285,7 @@ async function sweepExpired(feed){
   for(const rec of (feed.recommendations || [])){
     if(rec.status === 'pending' && rec.expires_at && now > new Date(rec.expires_at).getTime()){
       rec.status = 'expired';
-      await editStatusMessage(rec, `⏰ *${rec.coin} ${rec.direction}* — expired, no response in time.`);
+      await editStatusMessage(rec, `⏰ ${rec.coin} ${rec.direction} — expired, no response in time.`);
     }
   }
 }
@@ -253,4 +328,15 @@ async function main(){
   console.log('Poll cycle complete.');
 }
 
-main().catch(e => { console.error('Poller failed:', e); process.exit(1); });
+main().catch(async e => {
+  console.error('Poller failed:', e);
+  if(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID){
+    try{
+      await tg('sendMessage', {
+        chat_id: TELEGRAM_CHAT_ID,
+        text: `⚠ The Telegram poller crashed this run: ${e.message}\n\nAny pending confirm/deny taps from this cycle were not processed — they'll be picked up on the next run if still within their expiry window. Check the "Trade Agent Telegram Poller" workflow logs on GitHub.`
+      });
+    }catch(e2){ console.error('Could not send crash notification:', e2.message); }
+  }
+  process.exit(1);
+});
