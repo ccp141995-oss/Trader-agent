@@ -147,6 +147,8 @@
   .agent-scan-bar{display:flex;align-items:center;gap:8px;padding:2px 2px 12px;}
   .agent-scan-bar button{flex:1;padding:10px;background:var(--panel-2);border:1px solid var(--mint);color:var(--mint);border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;letter-spacing:.03em;}
   .agent-scan-bar button:disabled{opacity:.4;cursor:not-allowed;color:var(--muted);border-color:var(--line);}
+  .agent-scan-bar button.pause-btn{flex:none;width:auto;padding:10px 14px;border-color:var(--line);color:var(--muted);}
+  .agent-scan-bar button.pause-btn.paused{border-color:var(--amber);color:var(--amber);}
   .agent-meta{font-size:10.5px;color:var(--muted-2);padding:0 2px 10px;}
 
   .rec-card{border:1px solid var(--line);border-radius:8px;padding:11px;margin-bottom:9px;background:var(--panel-2);}
@@ -166,12 +168,47 @@
   .agent-disclaimer{font-size:10.5px;color:var(--muted-2);padding:8px 2px 0;line-height:1.5;border-top:1px solid var(--line-soft);margin-top:6px;}
 
   .confirm-modal{width:520px;}
-  .confirm-modal .rationale-box{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.6;color:var(--text);margin-bottom:14px;max-height:140px;overflow-y:auto;}
+  .confirm-modal .rationale-box{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.6;color:var(--text);margin-bottom:14px;max-height:180px;overflow-y:auto;white-space:pre-line;}
   .confirm-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
   .confirm-grid .field{margin-bottom:0;}
   .risk-check{font-size:11.5px;padding:9px 11px;border-radius:6px;margin-bottom:14px;border:1px solid var(--line);color:var(--muted);}
   .risk-check.ok{border-color:var(--mint-dim);color:var(--mint);background:#0b1a13;}
   .risk-check.bad{border-color:var(--red-dim);color:var(--red);background:#1a0b0b;}
+
+  /* ---------- Mobile ---------- */
+  @media (max-width: 860px){
+    html, body{ height:auto; }
+    .layout{ grid-template-columns:1fr; height:auto; }
+    .main-col, .side-col{ min-height:0; }
+    #chart{ min-height:300px; height:340px; flex:none; }
+    .panel-body{ max-height:60vh; }
+    .top-row{ padding:8px 12px; gap:8px; }
+    .brand-title{ font-size:12px; }
+    .acct-summary{ flex-wrap:wrap; gap:6px 14px; font-size:11px; width:100%; order:3; }
+    .top-actions{ margin-left:auto; }
+    .chart-toolbar{ padding:8px 10px; flex-wrap:wrap; gap:8px; }
+    .coin-select{ font-size:12px; padding:6px 8px; }
+    .mark-price{ font-size:16px; }
+    .interval-btn{ padding:7px 8px; }
+    .ticket{ padding:12px; }
+    .ticket-grid{ grid-template-columns:repeat(2, 1fr); gap:8px; }
+    .submit-btn{ grid-column:span 2; padding:13px; }
+    .tabs .tab{ font-size:11px; padding:10px 4px; }
+    .field.checkbox{ grid-column:span 2; }
+    .risk-grid{ grid-template-columns:1fr 1fr; }
+    .confirm-grid{ grid-template-columns:1fr 1fr; }
+    .modal{ padding:16px; width:94vw; }
+    /* Prevent iOS Safari auto-zoom on focus by keeping inputs at 16px */
+    input, select{ font-size:16px !important; }
+    .field label{ font-size:10px; }
+    .icon-btn, .interval-btn, .cancel-btn, .close-btn, .rec-actions button, .ticket-tab{ min-height:38px; }
+    .tape-item{ font-size:11px; }
+  }
+  @media (max-width: 420px){
+    .acct-summary{ font-size:10px; }
+    .ticket-grid{ grid-template-columns:1fr 1fr; }
+    .risk-grid{ grid-template-columns:1fr; }
+  }
 </style>
 </head>
 <body>
@@ -244,9 +281,13 @@
           <label>Size (coin units)</label>
           <input type="number" id="sizeInput" placeholder="0.00" step="any">
         </div>
-        <div class="field checkbox" style="grid-column:span 4;">
+        <div class="field checkbox" style="grid-column:span 2;">
           <input type="checkbox" id="reduceOnly">
           <label for="reduceOnly">Reduce only</label>
+        </div>
+        <div class="field" style="grid-column:span 2;">
+          <label>Take-profit (optional, USD)</label>
+          <input type="number" id="ticketTakeProfit" placeholder="0.00" step="any">
         </div>
         <button class="submit-btn buy" id="submitOrderBtn">Buy / Long BTC</button>
       </div>
@@ -267,6 +308,7 @@
       <div class="panel-view" id="view-agent">
         <div class="agent-scan-bar">
           <button id="scanBtn">Scan for opportunities</button>
+          <button id="pauseScanBtn" class="pause-btn">⏸ Pause auto-scan</button>
         </div>
         <div class="agent-meta" id="agentMeta">Not yet run. Needs an Anthropic API key and watchlist in Settings.</div>
         <div id="recList"><div class="empty-state">No recommendations yet. Run a scan to research sentiment, news and catalysts across your watchlist.</div></div>
@@ -307,14 +349,45 @@
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Anthropic API key (used client-side, from your browser, to call Claude with web search)</label>
       <input type="password" id="anthropicKeyInput" placeholder="sk-ant-...">
     </div>
+
     <div class="field">
-      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Watchlist (comma-separated coins)</label>
-      <input type="text" id="watchlistInput" placeholder="BTC,ETH,SOL,HYPE">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Scan mode</label>
+      <div class="net-toggle">
+        <button id="scanModeWatchlistBtn" class="sel-testnet">Watchlist</button>
+        <button id="scanModeFilteredBtn">Filtered universe</button>
+      </div>
     </div>
-    <div class="field">
-      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Or upload a ticker list (.xlsx, .xls, .csv)</label>
-      <input type="file" id="watchlistFile" accept=".xlsx,.xls,.csv" style="padding:7px 0;">
-      <div id="watchlistFileStatus" style="font-size:10.5px;color:var(--muted-2);margin-top:5px;"></div>
+
+    <div id="watchlistModeFields">
+      <div class="field">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Watchlist (comma-separated coins)</label>
+        <input type="text" id="watchlistInput" placeholder="BTC,ETH,SOL,HYPE">
+      </div>
+      <div class="field">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Or upload a ticker list (.xlsx, .xls, .csv)</label>
+        <input type="file" id="watchlistFile" accept=".xlsx,.xls,.csv" style="padding:7px 0;">
+        <div id="watchlistFileStatus" style="font-size:10.5px;color:var(--muted-2);margin-top:5px;"></div>
+      </div>
+    </div>
+
+    <div id="filteredModeFields" style="display:none;">
+      <div class="risk-grid">
+        <div class="field">
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Top N coins</label>
+          <input type="number" id="filteredTopNInput" placeholder="20" step="1">
+        </div>
+        <div class="field">
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Min. open interest (USD)</label>
+          <input type="number" id="filteredMinOiInput" placeholder="1000000" step="any">
+        </div>
+      </div>
+      <div class="field" style="margin-top:12px;">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Min. 24h volume (USD)</label>
+        <input type="number" id="filteredMinVolInput" placeholder="2000000" step="any">
+      </div>
+      <div class="warn-box" style="margin-top:10px;">
+        Ranks every tradeable Hyperliquid perp by 24h volume, drops anything below your OI/volume floors, and scans only the top N that remain. This avoids wasting research calls — and avoids trading — on thin, easily-manipulated markets.
+      </div>
     </div>
 
     <div class="section-label">Trade Agent — Auto-scan &amp; alerts</div>
@@ -350,9 +423,34 @@
         <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Max leverage</label>
         <input type="number" id="maxLeverageInput" placeholder="3" step="any">
       </div>
+      <div class="field">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Default take-profit (%)</label>
+        <input type="number" id="defaultTakeProfitPctInput" placeholder="3" step="any">
+      </div>
     </div>
     <div class="warn-box" style="margin-top:10px;">
-      A stop-loss is required on every agent-sourced trade. These limits are enforced in the confirm screen — you can tighten a trade, but never exceed them, no matter what the agent suggests.
+      A stop-loss is required on every agent-sourced trade. The default take-profit fills in automatically wherever a take-profit is left blank — on manual orders below and on agent recommendations that didn't suggest one — but you can always edit or clear it before confirming.
+    </div>
+
+    <div class="section-label">Sync to GitHub bot</div>
+    <div class="field">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">GitHub repo (owner/name)</label>
+      <input type="text" id="githubRepoInput" placeholder="yourusername/hyperliquid-agent">
+    </div>
+    <div class="field">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">GitHub personal access token (fine-grained, Contents: read &amp; write, scoped to this repo only)</label>
+      <input type="password" id="githubPatInput" placeholder="github_pat_...">
+    </div>
+    <div class="field checkbox" style="margin-bottom:10px;">
+      <input type="checkbox" id="autoPublishConfig">
+      <label for="autoPublishConfig">Auto-publish these settings to the bot whenever I save</label>
+    </div>
+    <div class="modal-actions" style="margin-bottom:10px;">
+      <button class="btn-secondary" id="publishConfigBtn" style="flex:1;">Publish now</button>
+    </div>
+    <div id="publishStatus" style="font-size:10.5px;color:var(--muted-2);margin-bottom:10px;"></div>
+    <div class="warn-box">
+      This publishes watchlist/scan mode, filtered-universe thresholds, max position size, max leverage and default take-profit to <code>docs/agent-config.json</code> in your repo — the backend scanner and Telegram executor read it and use it in place of their GitHub Variable defaults. It never touches trading keys or funds. Scope the token to just this one repo with Contents read/write only.
     </div>
 
     <div class="modal-actions">
@@ -421,6 +519,10 @@
     network:'hlDash_network', address:'hlDash_accountAddress', agentKey:'hlDash_agentKey',
     anthropicKey:'hlDash_anthropicKey', watchlist:'hlDash_watchlist',
     maxPositionPct:'hlDash_maxPositionPct', maxLeverage:'hlDash_maxLeverage',
+    defaultTakeProfitPct:'hlDash_defaultTakeProfitPct',
+    scanMode:'hlDash_scanMode', filteredTopN:'hlDash_filteredTopN',
+    filteredMinOI:'hlDash_filteredMinOI', filteredMinVolume24h:'hlDash_filteredMinVolume24h',
+    githubRepo:'hlDash_githubRepo', githubPat:'hlDash_githubPat', autoPublishConfig:'hlDash_autoPublishConfig',
     autoScanEnabled:'hlDash_autoScanEnabled', autoScanIntervalMin:'hlDash_autoScanIntervalMin',
     signalSensitivity:'hlDash_signalSensitivity'
   };
@@ -432,6 +534,15 @@
     watchlist: localStorage.getItem(LS_KEYS.watchlist) || 'BTC,ETH,SOL,HYPE',
     maxPositionPct: parseFloat(localStorage.getItem(LS_KEYS.maxPositionPct)) || 5,
     maxLeverage: parseFloat(localStorage.getItem(LS_KEYS.maxLeverage)) || 3,
+    defaultTakeProfitPct: parseFloat(localStorage.getItem(LS_KEYS.defaultTakeProfitPct)) || 3,
+    scanMode: localStorage.getItem(LS_KEYS.scanMode) || 'watchlist',
+    filteredTopN: parseInt(localStorage.getItem(LS_KEYS.filteredTopN), 10) || 20,
+    filteredMinOI: parseFloat(localStorage.getItem(LS_KEYS.filteredMinOI)) || 1000000,
+    filteredMinVolume24h: parseFloat(localStorage.getItem(LS_KEYS.filteredMinVolume24h)) || 2000000,
+    githubRepo: localStorage.getItem(LS_KEYS.githubRepo) || '',
+    githubPat: localStorage.getItem(LS_KEYS.githubPat) || '',
+    autoPublishConfig: localStorage.getItem(LS_KEYS.autoPublishConfig) === 'true',
+    autoScanPaused: localStorage.getItem('hlDash_autoScanPaused') === 'true',
     autoScanEnabled: localStorage.getItem(LS_KEYS.autoScanEnabled) === 'true',
     autoScanIntervalMin: parseFloat(localStorage.getItem(LS_KEYS.autoScanIntervalMin)) || 30,
     signalSensitivity: localStorage.getItem(LS_KEYS.signalSensitivity) || 'medium'
@@ -678,14 +789,30 @@
       }
 
       log('Submitting '+(isBuy?'BUY':'SELL')+' '+sz+' '+currentCoin+' @ '+limitPx.toFixed(2)+' ('+tif+')…');
-      const result = await sdk.exchange.placeOrder({
-        coin: currentCoin + '-PERP',
-        is_buy: isBuy,
-        sz: sz,
-        limit_px: parseFloat(limitPx.toFixed(2)),
-        order_type: { limit: { tif: tif } },
-        reduce_only: reduceOnly
-      });
+      const takeProfitInput = parseFloat(document.getElementById('ticketTakeProfit').value);
+      let result;
+      if(takeProfitInput && takeProfitInput > 0){
+        const orders = [{
+          coin: currentCoin + '-PERP', is_buy: isBuy, sz: sz,
+          limit_px: parseFloat(limitPx.toFixed(2)),
+          order_type: { limit: { tif: tif } }, reduce_only: reduceOnly
+        }, {
+          coin: currentCoin + '-PERP', is_buy: !isBuy, sz: sz,
+          limit_px: parseFloat(takeProfitInput.toFixed(2)),
+          order_type: { trigger: { isMarket: true, triggerPx: takeProfitInput.toFixed(2), tpsl: 'tp' } },
+          reduce_only: true
+        }];
+        result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
+      } else {
+        result = await sdk.exchange.placeOrder({
+          coin: currentCoin + '-PERP',
+          is_buy: isBuy,
+          sz: sz,
+          limit_px: parseFloat(limitPx.toFixed(2)),
+          order_type: { limit: { tif: tif } },
+          reduce_only: reduceOnly
+        });
+      }
       log('Order response: ' + JSON.stringify(result).slice(0,140), 'ok');
       loadAccountState();
     }catch(e){
@@ -723,6 +850,99 @@
       log('Close response: ' + JSON.stringify(result).slice(0,140), 'ok');
       loadAccountState();
     }catch(e){ log('Close failed: ' + e.message, 'err'); }
+  }
+
+  // ---------------- Technical analysis (candlestick patterns, RSI, MACD, Bollinger) ----------------
+  function taSma(arr, period){
+    if(arr.length < period) return null;
+    const slice = arr.slice(-period);
+    return slice.reduce((a,b)=>a+b, 0) / period;
+  }
+  function taStddev(arr, period){
+    const slice = arr.slice(-period);
+    if(slice.length < period) return null;
+    const mean = slice.reduce((a,b)=>a+b, 0) / period;
+    const variance = slice.reduce((a,b)=>a + (b-mean)*(b-mean), 0) / period;
+    return Math.sqrt(variance);
+  }
+  function taEmaSeries(arr, period){
+    const out = new Array(arr.length).fill(null);
+    if(arr.length < period) return out;
+    let prev = arr.slice(0, period).reduce((a,b)=>a+b, 0) / period;
+    out[period-1] = prev;
+    const k = 2 / (period + 1);
+    for(let i = period; i < arr.length; i++){ prev = arr[i]*k + prev*(1-k); out[i] = prev; }
+    return out;
+  }
+  function taRSI(closes, period){
+    if(closes.length < period+1) return null;
+    let gains = 0, losses = 0;
+    for(let i = closes.length - period; i < closes.length; i++){
+      const diff = closes[i] - closes[i-1];
+      if(diff >= 0) gains += diff; else losses -= diff;
+    }
+    const avgGain = gains/period, avgLoss = losses/period;
+    if(avgLoss === 0) return 100;
+    return 100 - (100/(1 + avgGain/avgLoss));
+  }
+  function taMacd(closes){
+    const ema12 = taEmaSeries(closes, 12), ema26 = taEmaSeries(closes, 26);
+    const macdLine = closes.map((_,i) => (ema12[i]!=null && ema26[i]!=null) ? ema12[i]-ema26[i] : null);
+    const macdValues = macdLine.filter(v => v != null);
+    const signalSeries = taEmaSeries(macdValues, 9);
+    const macd = macdValues.length ? macdValues[macdValues.length-1] : null;
+    const signal = signalSeries.length ? signalSeries[signalSeries.length-1] : null;
+    return { macd, signal, hist: (macd!=null && signal!=null) ? macd-signal : null };
+  }
+  function taDetectPatterns(opens, highs, lows, closes){
+    const n = closes.length;
+    if(n < 3) return [];
+    const patterns = [];
+    const o1=opens[n-1], c1=closes[n-1], h1=highs[n-1], l1=lows[n-1];
+    const o2=opens[n-2], c2=closes[n-2];
+    const body1 = Math.abs(c1-o1), range1 = (h1-l1) || 1e-9;
+    if(c2<o2 && c1>o1 && o1<=c2 && c1>=o2) patterns.push('bullish_engulfing');
+    if(c2>o2 && c1<o1 && o1>=c2 && c1<=o2) patterns.push('bearish_engulfing');
+    if(body1/range1 < 0.1) patterns.push('doji');
+    const upperWick1 = h1 - Math.max(o1,c1), lowerWick1 = Math.min(o1,c1) - l1;
+    if(lowerWick1 >= 2*body1 && upperWick1 <= body1*0.5 && body1/range1 < 0.4) patterns.push('hammer');
+    if(upperWick1 >= 2*body1 && lowerWick1 <= body1*0.5 && body1/range1 < 0.4) patterns.push('shooting_star');
+    return patterns;
+  }
+  async function loadTechnicals(coin){
+    try{
+      const endTime = Date.now();
+      const startTime = endTime - 15*60000*120;
+      const candles = await infoPost({ type:'candleSnapshot', req:{ coin, interval:'15m', startTime, endTime } });
+      if(!candles || candles.length < 30) return null;
+      const opens = candles.map(c=>parseFloat(c.o)), highs = candles.map(c=>parseFloat(c.h));
+      const lows = candles.map(c=>parseFloat(c.l)), closes = candles.map(c=>parseFloat(c.c));
+      const vols = candles.map(c=>parseFloat(c.v));
+      const rsi14 = taRSI(closes, 14);
+      const sma20 = taSma(closes, 20), sma50 = taSma(closes, 50);
+      const { macd, signal, hist } = taMacd(closes);
+      const bbSd = taStddev(closes, 20);
+      const bbUpper = (sma20!=null && bbSd!=null) ? sma20 + 2*bbSd : null;
+      const bbLower = (sma20!=null && bbSd!=null) ? sma20 - 2*bbSd : null;
+      return {
+        lastClose: closes[closes.length-1], rsi14, sma20, sma50,
+        macd, macdSignal: signal, macdHist: hist,
+        bbUpper, bbMid: sma20, bbLower, volSma20: taSma(vols,20), lastVol: vols[vols.length-1],
+        patterns: taDetectPatterns(opens,highs,lows,closes),
+        swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50))
+      };
+    }catch(e){ return null; }
+  }
+  function formatTechnicalLine(coin, t){
+    if(!t) return coin + ': technical data unavailable';
+    const f = (v,d) => v==null ? 'n/a' : v.toFixed(d);
+    return coin + ': price $'+f(t.lastClose,2)+', RSI14 '+f(t.rsi14,1)
+      + ', SMA20 $'+f(t.sma20,2)+' / SMA50 $'+f(t.sma50,2)
+      + ', MACD '+f(t.macd,4)+' vs signal '+f(t.macdSignal,4)+' (hist '+f(t.macdHist,4)+')'
+      + ', Bollinger $'+f(t.bbLower,2)+'–$'+f(t.bbUpper,2)+' (mid $'+f(t.bbMid,2)+')'
+      + ', volume '+f(t.lastVol,0)+' vs 20-bar avg '+f(t.volSma20,0)
+      + ', 50-bar range $'+f(t.swingLow,2)+'–$'+f(t.swingHigh,2)
+      + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none detected')+' (15m candles)';
   }
 
   // ---------------- Trade Agent ----------------
@@ -791,47 +1011,83 @@
     return Object.values(signals).filter(s => s.volRatio >= t.volRatio || Math.abs(s.imbalance) >= t.imbalance).map(s => s.coin);
   }
 
-  function buildAgentPrompt(signals){
+  function buildAgentPrompt(signals, technicals){
+    const techTable = Object.keys(technicals).map(coin => formatTechnicalLine(coin, technicals[coin])).join('\n');
     const rows = Object.values(signals);
-    const table = rows.map(r =>
-      r.coin+': mark $'+fmtNum(r.markPx,2)+', 24h '+(r.chg24hPct>=0?'+':'')+r.chg24hPct.toFixed(2)+'%, '
-      + 'funding '+(r.funding*100).toFixed(4)+'%/8h, OI '+fmtNum(r.openInterest,0)+', '
+    const supportTable = rows.map(r =>
+      r.coin+': funding '+(r.funding*100).toFixed(4)+'%/8h, OI '+fmtNum(r.openInterest,0)+', '
       + 'order-book imbalance '+(r.imbalance*100).toFixed(1)+'% ('+(r.imbalance>0?'bid-heavy':'ask-heavy')+'), '
       + 'spread '+(r.spreadPct!=null? r.spreadPct.toFixed(3)+'%':'n/a')+', '
       + '5m volume vs trailing avg '+r.volRatio.toFixed(2)+'x'
     ).join('\n');
 
-    const system = "You are JARVIS's trading research sub-agent for a Hyperliquid perpetuals account. "
-      + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses — "
-      + "with an early, near-term catalyst. Research using social media sentiment (X/Twitter, Reddit, crypto forums), recent economic and geopolitical "
-      + "news, and company/industry/sector news and trends. You have web search — use it. Combine what you find with the funding, open-interest, "
-      + "order-book imbalance and volume-spike readings provided below; a volume spike or heavy book imbalance alongside a real news/sentiment catalyst "
-      + "is a stronger signal than either alone, but do not recommend a trade on technical signals alone with no identifiable catalyst. "
+    const system = "You are JARVIS's trading research sub-agent for a Hyperliquid perpetuals account, acting as a master chart technician. "
+      + "Your PRIMARY basis for every recommendation must be technical analysis: candlestick chart patterns, confirmed by volume, and agreement from "
+      + "popular indicators (RSI, MACD, Bollinger Bands, moving averages) — all computed for you below from real 15-minute candle data. Only recommend "
+      + "a trade when the technical picture is genuinely compelling: a real pattern, confirmed by volume, with at least one indicator in agreement — "
+      + "not a single signal in isolation, and never a trade with no identifiable pattern or indicator confluence. "
+      + "After forming your technical view, do ONE quick supplementary web search per candidate for sentiment and social buzz (X/Twitter, Reddit, "
+      + "crypto forums) and recent news — use this only to confirm or flag a conflict with the technical picture, never as the primary reason for a trade. "
+      + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
       + "You NEVER place trades yourself; you only propose them for human review. "
-      + "Return at most 3 ideas — only ones with genuine quick-turnaround conviction; return fewer or none if nothing qualifies. "
-      + "Every idea MUST include a concrete stop_loss_price. Be concise: rationale <= 35 words, catalyst <= 15 words. "
+      + "Return at most 3 ideas — only ones with genuine technical conviction; return fewer or none if nothing qualifies. "
+      + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing). "
+      + "Be concise: rationale <= 35 words, sentiment_note <= 20 words. "
       + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
       + '{"recommendations":[{"coin":string,"direction":"long"|"short","conviction":"low"|"medium"|"high",'
-      + '"catalyst":string,"rationale":string,"time_horizon":string,"entry_price":number,"stop_loss_price":number,'
-      + '"take_profit_price":number|null,"suggested_size_pct_equity":number,"suggested_leverage":number,"risk_flags":[string]}]}';
+      + '"pattern":string,"indicators_confirming":[string],"sentiment_note":string,"rationale":string,"time_horizon":string,'
+      + '"entry_price":number,"stop_loss_price":number,"take_profit_price":number|null,'
+      + '"suggested_size_pct_equity":number,"suggested_leverage":number,"risk_flags":[string]}]}';
 
-    const user = "Watchlist market + order-book + volume context:\n" + table + "\n\nFind the best quick-turnaround opportunities right now among these coins (or state none if nothing compelling).";
+    const user = "Technical readout (primary evidence):\n" + techTable
+      + "\n\nSupporting market data (funding/OI/book/volume):\n" + supportTable
+      + "\n\nFind the best technically-confirmed, quick-turnaround opportunities right now among these coins (or state none if the technical picture isn't compelling for any of them).";
     return { system, user };
+  }
+
+  async function loadFilteredUniverse(){
+    const data = await infoPost({ type: 'metaAndAssetCtxs' });
+    const meta = data[0], ctxs = data[1];
+    const rows = [];
+    meta.universe.forEach((u, idx) => {
+      if(u.isDelisted) return;
+      const ctx = ctxs[idx];
+      if(!ctx) return;
+      const mark = parseFloat(ctx.markPx);
+      const oiNotional = parseFloat(ctx.openInterest) * mark;
+      const vol24h = parseFloat(ctx.dayNtlVlm);
+      if(oiNotional >= cfg.filteredMinOI && vol24h >= cfg.filteredMinVolume24h){
+        rows.push({ coin: u.name, oiNotional, vol24h });
+      }
+    });
+    rows.sort((a,b) => b.vol24h - a.vol24h);
+    return rows.slice(0, cfg.filteredTopN).map(r => r.coin);
+  }
+
+  async function resolveScanCoins(){
+    if(cfg.scanMode === 'filtered'){
+      const coins = await loadFilteredUniverse();
+      if(!coins.length) log('Filtered universe returned no coins — thresholds may be too strict', 'err');
+      return coins;
+    }
+    return cfg.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
   }
 
   async function runAgentScan(coinsOverride){
     const btn = document.getElementById('scanBtn');
     const metaEl = document.getElementById('agentMeta');
     if(!cfg.anthropicKey){ log('Add an Anthropic API key in Settings to run the Trade Agent', 'err'); return; }
-    const coins = coinsOverride && coinsOverride.length ? coinsOverride :
-      cfg.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
-    if(!coins.length){ log('Add coins to your watchlist in Settings', 'err'); return; }
+    const coins = coinsOverride && coinsOverride.length ? coinsOverride : await resolveScanCoins();
+    if(!coins.length){ log('No coins to scan — check your watchlist or filtered-universe thresholds in Settings', 'err'); return; }
 
     btn.disabled = true; btn.textContent = 'Researching…';
     metaEl.textContent = 'Gathering signals and researching '+coins.join(', ')+'…';
     try{
       const signals = await loadSignals(coins);
-      const { system, user } = buildAgentPrompt(signals);
+      metaEl.textContent = 'Analyzing candlestick patterns and indicators for '+coins.join(', ')+'…';
+      const technicals = {};
+      for(const c of coins){ technicals[c] = await loadTechnicals(c); }
+      const { system, user } = buildAgentPrompt(signals, technicals);
 
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method:'POST',
@@ -883,8 +1139,8 @@
   }
 
   async function autoScanTick(){
-    if(!cfg.autoScanEnabled || !cfg.anthropicKey) return;
-    const coins = cfg.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+    if(!cfg.autoScanEnabled || cfg.autoScanPaused || !cfg.anthropicKey) return;
+    const coins = await resolveScanCoins();
     if(!coins.length) return;
     const minGapMs = cfg.autoScanIntervalMin * 60000;
     const maxGapMs = minGapMs * 4;
@@ -924,7 +1180,7 @@
       return '<div class="rec-card">'
         + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
         + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+sourceTag+statusBadge+'</span></div>'
-        + '<div class="rec-catalyst">'+ (r.catalyst||'') +'</div>'
+        + '<div class="rec-catalyst"><b>'+(r.pattern||'Pattern n/a')+'</b>'+((r.indicators_confirming&&r.indicators_confirming.length)?' — '+r.indicators_confirming.join(', '):'')+'</div>'
         + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+'</div>'
         + actions + '</div>';
     }).join('');
@@ -972,12 +1228,21 @@
   function openConfirmModal(rec){
     document.getElementById('confirmTitle').textContent = rec.coin + ' — ' + (rec.direction === 'long' ? 'Long' : 'Short') + ' (' + (rec.conviction||'low') + ' conviction)';
     document.getElementById('confirmSub').textContent = rec.time_horizon || '';
-    document.getElementById('confirmRationale').textContent = rec.rationale || '';
+    document.getElementById('confirmRationale').textContent =
+      'Pattern: ' + (rec.pattern || '—') + '\n'
+      + 'Confirming indicators: ' + ((rec.indicators_confirming && rec.indicators_confirming.length) ? rec.indicators_confirming.join(', ') : '—') + '\n'
+      + 'Rationale: ' + (rec.rationale || '—') + '\n'
+      + 'Sentiment check: ' + (rec.sentiment_note || '—');
     document.getElementById('confDirection').value = rec.direction === 'short' ? 'sell' : 'buy';
     document.getElementById('confEntryType').value = 'limit';
     document.getElementById('confEntryPrice').value = rec.entry_price || '';
     document.getElementById('confStopLoss').value = rec.stop_loss_price || '';
-    document.getElementById('confTakeProfit').value = rec.take_profit_price || '';
+    let tpPrice = rec.take_profit_price;
+    if(!tpPrice && rec.entry_price && cfg.defaultTakeProfitPct){
+      const mult = 1 + (cfg.defaultTakeProfitPct/100) * (rec.direction === 'short' ? -1 : 1);
+      tpPrice = parseFloat((rec.entry_price * mult).toFixed(2));
+    }
+    document.getElementById('confTakeProfit').value = tpPrice || '';
     document.getElementById('confLeverage').value = Math.min(rec.suggested_leverage || 1, cfg.maxLeverage);
 
     const equity = lastAccountValue || 0;
@@ -1134,6 +1399,84 @@
     statusEl.textContent = 'Found ' + tickers.length + ' ticker(s): ' + tickers.join(', ') + '. Review the field above, then Connect to save.';
   }
 
+  // ---------------- GitHub bot sync ----------------
+  function buildSharedConfig(){
+    return {
+      watchlist: cfg.watchlist,
+      scanMode: cfg.scanMode,
+      filteredTopN: cfg.filteredTopN,
+      filteredMinOI: cfg.filteredMinOI,
+      filteredMinVolume24h: cfg.filteredMinVolume24h,
+      maxPositionPct: cfg.maxPositionPct,
+      maxLeverage: cfg.maxLeverage,
+      defaultTakeProfitPct: cfg.defaultTakeProfitPct,
+      paused: cfg.autoScanPaused,
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function ghHeaders(){
+    return { 'Authorization': 'token ' + cfg.githubPat, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' };
+  }
+
+  function b64EncodeUnicode(str){
+    return btoa(unescape(encodeURIComponent(str)));
+  }
+
+  async function publishConfigToGitHub(){
+    const statusEl = document.getElementById('publishStatus');
+    if(!cfg.githubPat || !cfg.githubRepo){
+      if(statusEl) statusEl.textContent = 'Add a GitHub repo and token above to publish.';
+      log('Add a GitHub token and repo in Settings to publish config to the bot', 'err');
+      return;
+    }
+    const apiUrl = 'https://api.github.com/repos/' + cfg.githubRepo + '/contents/docs/agent-config.json';
+    if(statusEl) statusEl.textContent = 'Publishing…';
+    try{
+      let sha = null;
+      const getRes = await fetch(apiUrl, { headers: ghHeaders() });
+      if(getRes.ok){ const getData = await getRes.json(); sha = getData.sha; }
+      const content = buildSharedConfig();
+      const body = {
+        message: 'Update agent config from dashboard',
+        content: b64EncodeUnicode(JSON.stringify(content, null, 2))
+      };
+      if(sha) body.sha = sha;
+      const putRes = await fetch(apiUrl, { method:'PUT', headers: ghHeaders(), body: JSON.stringify(body) });
+      const putData = await putRes.json();
+      if(!putRes.ok){ throw new Error(putData.message || ('HTTP ' + putRes.status)); }
+      if(statusEl) statusEl.textContent = 'Published to ' + cfg.githubRepo + ' at ' + new Date().toLocaleTimeString() + '.';
+      log('Published settings to the bot (docs/agent-config.json updated)', 'ok');
+    }catch(e){
+      if(statusEl) statusEl.textContent = 'Publish failed: ' + e.message;
+      log('Publish to GitHub failed: ' + e.message, 'err');
+    }
+  }
+
+  function updatePauseButton(){
+    const btn = document.getElementById('pauseScanBtn');
+    if(!btn) return;
+    btn.textContent = cfg.autoScanPaused ? '▶ Resume auto-scan' : '⏸ Pause auto-scan';
+    btn.classList.toggle('paused', cfg.autoScanPaused);
+  }
+
+  async function togglePauseScan(){
+    cfg.autoScanPaused = !cfg.autoScanPaused;
+    localStorage.setItem('hlDash_autoScanPaused', cfg.autoScanPaused);
+    updatePauseButton();
+    log(cfg.autoScanPaused ? 'Auto-scan paused' : 'Auto-scan resumed', 'ok');
+    if(cfg.githubPat && cfg.githubRepo){
+      await publishConfigToGitHub();
+      document.getElementById('agentMeta').textContent = cfg.autoScanPaused
+        ? 'Paused — pushed to the bot, it will skip scans until resumed.'
+        : 'Resumed — pushed to the bot.';
+    } else {
+      document.getElementById('agentMeta').textContent = cfg.autoScanPaused
+        ? 'Paused locally. Add a GitHub token in Settings to also pause the backend bot.'
+        : 'Resumed locally.';
+    }
+  }
+
   function updateSubmitLabel(){
     const btn = document.getElementById('submitOrderBtn');
     btn.textContent = (side === 'buy' ? 'Buy / Long ' : 'Sell / Short ') + currentCoin;
@@ -1182,8 +1525,17 @@
       document.getElementById('agentKeyInput').value = cfg.agentKey;
       document.getElementById('anthropicKeyInput').value = cfg.anthropicKey;
       document.getElementById('watchlistInput').value = cfg.watchlist;
+      document.getElementById('filteredTopNInput').value = cfg.filteredTopN;
+      document.getElementById('filteredMinOiInput').value = cfg.filteredMinOI;
+      document.getElementById('filteredMinVolInput').value = cfg.filteredMinVolume24h;
+      setScanModeToggle(cfg.scanMode);
       document.getElementById('maxPositionPctInput').value = cfg.maxPositionPct;
       document.getElementById('maxLeverageInput').value = cfg.maxLeverage;
+      document.getElementById('defaultTakeProfitPctInput').value = cfg.defaultTakeProfitPct;
+      document.getElementById('githubRepoInput').value = cfg.githubRepo;
+      document.getElementById('githubPatInput').value = cfg.githubPat;
+      document.getElementById('autoPublishConfig').checked = cfg.autoPublishConfig;
+      document.getElementById('publishStatus').textContent = '';
       document.getElementById('autoScanEnabled').checked = cfg.autoScanEnabled;
       document.getElementById('autoScanIntervalInput').value = cfg.autoScanIntervalMin;
       document.getElementById('signalSensitivityInput').value = cfg.signalSensitivity;
@@ -1195,14 +1547,36 @@
     });
     document.getElementById('netTestnetBtn').addEventListener('click', ()=> setNetToggle('testnet'));
     document.getElementById('netMainnetBtn').addEventListener('click', ()=> setNetToggle('mainnet'));
+    document.getElementById('scanModeWatchlistBtn').addEventListener('click', ()=> setScanModeToggle('watchlist'));
+    document.getElementById('scanModeFilteredBtn').addEventListener('click', ()=> setScanModeToggle('filtered'));
+    document.getElementById('publishConfigBtn').addEventListener('click', ()=>{
+      // publish whatever is currently typed in the modal, without requiring a full save/connect first
+      cfg.watchlist = document.getElementById('watchlistInput').value.trim() || cfg.watchlist;
+      cfg.filteredTopN = parseInt(document.getElementById('filteredTopNInput').value, 10) || cfg.filteredTopN;
+      cfg.filteredMinOI = parseFloat(document.getElementById('filteredMinOiInput').value) || cfg.filteredMinOI;
+      cfg.filteredMinVolume24h = parseFloat(document.getElementById('filteredMinVolInput').value) || cfg.filteredMinVolume24h;
+      cfg.maxPositionPct = parseFloat(document.getElementById('maxPositionPctInput').value) || cfg.maxPositionPct;
+      cfg.maxLeverage = parseFloat(document.getElementById('maxLeverageInput').value) || cfg.maxLeverage;
+      cfg.defaultTakeProfitPct = parseFloat(document.getElementById('defaultTakeProfitPctInput').value) || cfg.defaultTakeProfitPct;
+      cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
+      cfg.githubPat = document.getElementById('githubPatInput').value.trim();
+      publishConfigToGitHub();
+    });
 
     document.getElementById('saveSettings').addEventListener('click', ()=>{
       cfg.address = document.getElementById('accountAddressInput').value.trim();
       cfg.agentKey = document.getElementById('agentKeyInput').value.trim();
       cfg.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
       cfg.watchlist = document.getElementById('watchlistInput').value.trim() || 'BTC,ETH,SOL,HYPE';
+      cfg.filteredTopN = parseInt(document.getElementById('filteredTopNInput').value, 10) || 20;
+      cfg.filteredMinOI = parseFloat(document.getElementById('filteredMinOiInput').value) || 1000000;
+      cfg.filteredMinVolume24h = parseFloat(document.getElementById('filteredMinVolInput').value) || 2000000;
       cfg.maxPositionPct = parseFloat(document.getElementById('maxPositionPctInput').value) || 5;
       cfg.maxLeverage = parseFloat(document.getElementById('maxLeverageInput').value) || 3;
+      cfg.defaultTakeProfitPct = parseFloat(document.getElementById('defaultTakeProfitPctInput').value) || 3;
+      cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
+      cfg.githubPat = document.getElementById('githubPatInput').value.trim();
+      cfg.autoPublishConfig = document.getElementById('autoPublishConfig').checked;
       cfg.autoScanEnabled = document.getElementById('autoScanEnabled').checked;
       cfg.autoScanIntervalMin = parseFloat(document.getElementById('autoScanIntervalInput').value) || 30;
       cfg.signalSensitivity = document.getElementById('signalSensitivityInput').value;
@@ -1211,8 +1585,17 @@
       localStorage.setItem(LS_KEYS.agentKey, cfg.agentKey);
       localStorage.setItem(LS_KEYS.anthropicKey, cfg.anthropicKey);
       localStorage.setItem(LS_KEYS.watchlist, cfg.watchlist);
+      localStorage.setItem(LS_KEYS.scanMode, cfg.scanMode);
+      localStorage.setItem(LS_KEYS.filteredTopN, cfg.filteredTopN);
+      localStorage.setItem(LS_KEYS.filteredMinOI, cfg.filteredMinOI);
+      localStorage.setItem(LS_KEYS.filteredMinVolume24h, cfg.filteredMinVolume24h);
       localStorage.setItem(LS_KEYS.maxPositionPct, cfg.maxPositionPct);
       localStorage.setItem(LS_KEYS.maxLeverage, cfg.maxLeverage);
+      localStorage.setItem(LS_KEYS.defaultTakeProfitPct, cfg.defaultTakeProfitPct);
+      localStorage.setItem(LS_KEYS.githubRepo, cfg.githubRepo);
+      localStorage.setItem(LS_KEYS.githubPat, cfg.githubPat);
+      localStorage.setItem(LS_KEYS.autoPublishConfig, cfg.autoPublishConfig);
+      if(cfg.autoPublishConfig) publishConfigToGitHub();
       localStorage.setItem(LS_KEYS.autoScanEnabled, cfg.autoScanEnabled);
       localStorage.setItem(LS_KEYS.autoScanIntervalMin, cfg.autoScanIntervalMin);
       localStorage.setItem(LS_KEYS.signalSensitivity, cfg.signalSensitivity);
@@ -1267,6 +1650,7 @@
     });
 
     document.getElementById('scanBtn').addEventListener('click', ()=> runAgentScan());
+    document.getElementById('pauseScanBtn').addEventListener('click', togglePauseScan);
     document.getElementById('watchlistFile').addEventListener('change', (e)=>{
       if(e.target.files && e.target.files[0]) handleWatchlistFile(e.target.files[0]);
     });
@@ -1286,10 +1670,19 @@
     document.getElementById('netMainnetBtn').classList.toggle('sel-mainnet', net==='mainnet');
   }
 
+  function setScanModeToggle(mode){
+    cfg.scanMode = mode;
+    document.getElementById('scanModeWatchlistBtn').classList.toggle('sel-testnet', mode==='watchlist');
+    document.getElementById('scanModeFilteredBtn').classList.toggle('sel-mainnet', mode==='filtered');
+    document.getElementById('watchlistModeFields').style.display = mode==='watchlist' ? 'block' : 'none';
+    document.getElementById('filteredModeFields').style.display = mode==='filtered' ? 'block' : 'none';
+  }
+
   // ---------------- Boot ----------------
   async function boot(){
     wireUi();
     initChart();
+    updatePauseButton();
     await loadMeta();
     await loadMids();
     await loadCandles();

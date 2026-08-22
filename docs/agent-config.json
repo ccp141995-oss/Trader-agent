@@ -1,0 +1,12 @@
+{
+  "watchlist": "BTC,ETH,SOL,HYPE",
+  "scanMode": "watchlist",
+  "filteredTopN": 20,
+  "filteredMinOI": 1000000,
+  "filteredMinVolume24h": 2000000,
+  "maxPositionPct": 5,
+  "maxLeverage": 3,
+  "defaultTakeProfitPct": 3,
+  "paused": false,
+  "updated_at": null
+}
