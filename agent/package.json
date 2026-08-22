@@ -2,9 +2,12 @@
   "name": "jarvis-trade-agent-scanner",
   "version": "1.0.0",
   "private": true,
-  "description": "Backend signal scanner for the JARVIS Hyperliquid trade agent. No trading keys, no order placement — research and alerting only.",
+  "description": "Backend signal scanner + Telegram confirm/deny executor for the JARVIS Hyperliquid trade agent.",
   "main": "scan.js",
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "hyperliquid": "*"
   }
 }

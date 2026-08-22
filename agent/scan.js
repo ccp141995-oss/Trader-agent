@@ -19,6 +19,11 @@ const INTERVAL_MIN = parseFloat(process.env.AUTO_SCAN_INTERVAL_MIN || '30');
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
+
+function shortId(){
+  return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+}
 
 const STATE_PATH = path.join(__dirname, 'state.json');
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
@@ -162,18 +167,22 @@ async function callAnthropic(system, user){
   return JSON.parse(raw);
 }
 
-async function sendTelegram(text){
+async function sendTelegram(text, replyMarkup){
   if(!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID){
     console.log('Telegram not configured, skipping send. Message would have been:\n' + text);
-    return;
+    return null;
   }
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const body = { chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'Markdown', disable_web_page_preview: true };
+  if(replyMarkup) body.reply_markup = replyMarkup;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'Markdown', disable_web_page_preview: true })
+    body: JSON.stringify(body)
   });
-  if(!res.ok) console.error('Telegram send failed: HTTP ' + res.status);
+  const data = await res.json();
+  if(!res.ok || !data.ok){ console.error('Telegram send failed:', data.description || res.status); return null; }
+  return data.result.message_id;
 }
 
 function formatTelegramMessage(rec){
@@ -184,8 +193,8 @@ function formatTelegramMessage(rec){
     + `Why: ${rec.rationale || '—'}\n`
     + `Horizon: ${rec.time_horizon || '—'}\n`
     + `Entry ~$${rec.entry_price} · Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : '') + `\n`
-    + `Suggested size: ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage${flags}\n`
-    + `Not financial advice. Review and confirm in the dashboard before anything is placed.`;
+    + `Sized at ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (capped by your configured limits at execution)${flags}\n`
+    + `Expires in ${EXECUTION_WINDOW_MIN} min. Not financial advice — tap below to confirm or deny.`;
 }
 
 async function main(){
@@ -230,11 +239,24 @@ async function main(){
   console.log('Got ' + newRecs.length + ' recommendation(s).');
 
   const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + EXECUTION_WINDOW_MIN * 60000).toISOString();
   for(const rec of newRecs){
-    rec.id = rec.coin + '-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
+    rec.id = shortId();
     rec.generated_at = now;
+    rec.expires_at = expiresAt;
     rec.source = 'backend';
-    await sendTelegram(formatTelegramMessage(rec));
+    rec.status = 'pending';
+    const replyMarkup = {
+      inline_keyboard: [[
+        { text: '✅ Confirm', callback_data: 'confirm:' + rec.id },
+        { text: '❌ Deny', callback_data: 'deny:' + rec.id }
+      ]]
+    };
+    const messageId = await sendTelegram(formatTelegramMessage(rec), replyMarkup);
+    if(messageId){
+      rec.telegram_message_id = messageId;
+      rec.telegram_chat_id = TELEGRAM_CHAT_ID;
+    }
   }
 
   feed.recommendations = newRecs.concat(feed.recommendations || []).slice(0, 30);
