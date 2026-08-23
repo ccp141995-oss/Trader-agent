@@ -8,6 +8,6 @@
   "maxLeverage": 3,
   "defaultTakeProfitPct": 3,
   "maxStopLossPct": 5,
-  "paused": false,
+  "aiResearchEnabled": true,
   "updated_at": null
 }

@@ -174,8 +174,6 @@
   .agent-scan-bar{display:flex;align-items:center;gap:8px;padding:2px 2px 12px;}
   .agent-scan-bar button{flex:1;padding:10px;background:var(--panel-2);border:1px solid var(--mint);color:var(--mint);border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;letter-spacing:.03em;}
   .agent-scan-bar button:disabled{opacity:.4;cursor:not-allowed;color:var(--muted);border-color:var(--line);}
-  .agent-scan-bar button.pause-btn{flex:none;width:auto;padding:10px 14px;border-color:var(--line);color:var(--muted);}
-  .agent-scan-bar button.pause-btn.paused{border-color:var(--amber);color:var(--amber);}
   .agent-meta{font-size:10.5px;color:var(--muted-2);padding:0 2px 10px;}
 
   .rec-card{border:1px solid var(--line);border-radius:8px;padding:11px;margin-bottom:9px;background:var(--panel-2);}
@@ -355,11 +353,10 @@
       <div class="panel-view" id="view-agent">
         <div class="agent-scan-bar">
           <button id="scanBtn">Scan for opportunities</button>
-          <button id="pauseScanBtn" class="pause-btn">⏸ Pause auto-scan</button>
         </div>
-        <div class="agent-meta" id="agentMeta">Not yet run. Needs an Anthropic API key and watchlist in Settings.</div>
-        <div id="recList"><div class="empty-state">No recommendations yet. Run a scan to research sentiment, news and catalysts across your watchlist.</div></div>
-        <div class="agent-disclaimer">Research and sizing are AI-generated, not financial advice. Every trade requires your explicit confirmation and is capped by the risk rules in Settings.</div>
+        <div class="agent-meta" id="agentMeta">Not yet run. Needs a watchlist in Settings — add an Anthropic API key too if you want AI research, or leave it off to run on technicals only.</div>
+        <div id="recList"><div class="empty-state">No recommendations yet. Run a scan to check technicals across your watchlist.</div></div>
+        <div class="agent-disclaimer">Sizing and risk levels are algorithmic; rationale is AI-generated when AI research is enabled. Not financial advice. Every trade requires your explicit confirmation and is capped by the risk rules in Settings.</div>
       </div>
     </div>
     <div class="log-header">
@@ -405,8 +402,15 @@
     </div>
 
     <div class="section-label">Trade Agent — Research</div>
+    <div class="field checkbox" style="margin-bottom:14px;">
+      <input type="checkbox" id="aiResearchEnabled">
+      <label for="aiResearchEnabled">Enable AI research (Anthropic + web search)</label>
+    </div>
+    <div class="warn-box" style="margin-bottom:14px;">
+      Technical checks (order book, volume, multi-timeframe alignment, support/resistance) always run for free, regardless of this toggle. Turn this off to run purely on technicals — ideas will skip sentiment/news and skip the Anthropic API call entirely, at zero cost. Turn it on to also get AI-researched sentiment and rationale, throttled by the cooldown below.
+    </div>
     <div class="field">
-      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Anthropic API key (used client-side, from your browser, to call Claude with web search)</label>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Anthropic API key (used client-side, from your browser, to call Claude with web search — only needed if AI research is enabled above)</label>
       <input type="password" id="anthropicKeyInput" placeholder="sk-ant-...">
     </div>
 
@@ -457,7 +461,7 @@
     </div>
     <div class="risk-grid">
       <div class="field">
-        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Min. minutes between triggered scans</label>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Min. minutes between AI calls</label>
         <input type="number" id="autoScanIntervalInput" placeholder="30" step="1">
       </div>
       <div class="field">
@@ -470,7 +474,7 @@
       </div>
     </div>
     <div class="warn-box" style="margin-top:10px;">
-      There is no scheduled "full scan" — Anthropic is only ever called when a coin actually trips a volume-spike or book-imbalance threshold. This checks free order-book/volume data every couple of minutes for free; the number above is just a cooldown floor between triggered scans, not a timer that forces one. If nothing trips a signal, nothing gets called, no matter how much time passes. Notifications only fire while this tab is open in your browser.
+      Order-book and volume checks run every couple of minutes regardless of this setting — that part is always free and never throttled. The number above only throttles the Anthropic call specifically: if AI research is enabled and a signal trips again before this many minutes have passed since the last AI call, you'll get a technicals-only idea instead of waiting. With AI research turned off, this number does nothing — technicals-only ideas have no cooldown at all. Notifications only fire while this tab is open in your browser.
     </div>
 
     <div class="section-label">Trade Agent — Risk Rules</div>
@@ -608,7 +612,7 @@
     githubRepo: localStorage.getItem(LS_KEYS.githubRepo) || '',
     githubPat: localStorage.getItem(LS_KEYS.githubPat) || '',
     autoPublishConfig: localStorage.getItem(LS_KEYS.autoPublishConfig) === 'true',
-    autoScanPaused: localStorage.getItem('hlDash_autoScanPaused') === 'true',
+    aiResearchEnabled: localStorage.getItem('hlDash_aiResearchEnabled') !== 'false',
     autoScanEnabled: localStorage.getItem(LS_KEYS.autoScanEnabled) === 'true',
     autoScanIntervalMin: parseFloat(localStorage.getItem(LS_KEYS.autoScanIntervalMin)) || 30,
     signalSensitivity: localStorage.getItem(LS_KEYS.signalSensitivity) || 'medium'
@@ -1440,12 +1444,11 @@
   async function runAgentScan(coinsOverride){
     const btn = document.getElementById('scanBtn');
     const metaEl = document.getElementById('agentMeta');
-    if(!cfg.anthropicKey){ log('Add an Anthropic API key in Settings to run the Trade Agent', 'err'); return; }
     const coins = coinsOverride && coinsOverride.length ? coinsOverride : await resolveScanCoins();
     if(!coins.length){ log('No coins to scan — check your watchlist or filtered-universe thresholds in Settings', 'err'); return; }
 
-    btn.disabled = true; btn.textContent = 'Researching…';
-    metaEl.textContent = 'Gathering signals and researching '+coins.join(', ')+'…';
+    btn.disabled = true; btn.textContent = 'Checking technicals…';
+    metaEl.textContent = 'Gathering signals for '+coins.join(', ')+'…';
     try{
       const signals = await loadSignals(coins);
       metaEl.textContent = 'Checking multi-timeframe alignment (15m/1h/4h) for '+coins.join(', ')+'…';
@@ -1456,10 +1459,21 @@
         alignments[c] = computeAlignment(mtfData[c]);
         log(c + ': ' + (alignments[c].direction ? alignments[c].direction.toUpperCase() : 'no alignment') + ' (' + alignments[c].agree + '/' + alignments[c].total + ' timeframes agree)', alignments[c].direction ? 'ok' : '');
       }
-      const alignedCoins = coins.filter(c => alignments[c].direction !== null);
+      let alignedCoins = coins.filter(c => alignments[c].direction !== null);
       if(!alignedCoins.length){
-        log('No coin reached multi-timeframe alignment (need 2/3 of 15m/1h/4h agreeing) — skipping this scan, nothing sent to Anthropic.', 'err');
+        log('No coin reached multi-timeframe alignment (need 2/3 of 15m/1h/4h agreeing) this scan.', 'err');
         metaEl.textContent = 'No multi-timeframe alignment found across ' + coins.join(', ') + ' — nothing compelling this scan.';
+        btn.disabled = false; btn.textContent = 'Scan for opportunities';
+        return;
+      }
+
+      // Skip coins that already have an outstanding pending recommendation, whatever its source.
+      const alreadyPending = new Set(recommendations.filter(r => r.status === 'pending' || !r.status).map(r => r.coin));
+      const skipped = alignedCoins.filter(c => alreadyPending.has(c));
+      alignedCoins = alignedCoins.filter(c => !alreadyPending.has(c));
+      if(skipped.length) log('Skipping (already has a pending recommendation): ' + skipped.join(', '), '');
+      if(!alignedCoins.length){
+        metaEl.textContent = 'Aligned coins already have pending recommendations — nothing new this scan.';
         btn.disabled = false; btn.textContent = 'Scan for opportunities';
         return;
       }
@@ -1470,40 +1484,60 @@
       const technicals = {};
       alignedCoins.forEach(c => { technicals[c] = mtfData[c]['15m']; });
 
-      const { system, user } = buildAgentPrompt(subsetSignals, subsetMtf, subsetAlignments);
-
+      // Only the AI call is gated: by the toggle, and — when enabled — by the cooldown. Technicals
+      // are always free and were already computed above regardless of any of this.
       let newRecs;
       let usedFallback = false;
-      try{
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method:'POST',
-          headers:{
-            'Content-Type':'application/json',
-            'x-api-key': cfg.anthropicKey,
-            'anthropic-version':'2023-06-01',
-            'anthropic-dangerous-direct-browser-access':'true'
-          },
-          body: JSON.stringify({
-            model:'claude-sonnet-4-6',
-            max_tokens: 1000,
-            system: system,
-            messages:[{ role:'user', content: user }],
-            tools:[{ type:'web_search_20250305', name:'web_search' }]
-          })
-        });
-        const data = await res.json();
-        if(data.error){ throw new Error(data.error.message || 'Anthropic API error'); }
+      const minGapMs = cfg.autoScanIntervalMin * 60000;
+      const sinceLastAiCall = Date.now() - lastFullScanTime;
 
-        const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
-        let raw = textBlocks.join('\n').trim().replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim();
-        let parsed;
-        try{ parsed = JSON.parse(raw); }
-        catch(e){ throw new Error('Could not parse agent response as JSON'); }
-        newRecs = parsed.recommendations || [];
-      }catch(e){
-        log('Anthropic unavailable (' + e.message + ') — continuing with technicals-only ideas, no sentiment check this run', 'err');
+      if(!cfg.aiResearchEnabled){
+        metaEl.textContent = 'AI research is off — generating technicals-only ideas for ' + alignedCoins.join(', ') + '…';
         newRecs = buildFallbackRecommendations(alignedCoins, technicals, cfg.maxPositionPct, cfg.maxStopLossPct, cfg.defaultTakeProfitPct);
         usedFallback = true;
+      } else if(!cfg.anthropicKey){
+        log('AI research is enabled but no Anthropic API key is set — generating technicals-only ideas instead. Add a key in Settings, or turn AI research off to stop seeing this.', 'err');
+        newRecs = buildFallbackRecommendations(alignedCoins, technicals, cfg.maxPositionPct, cfg.maxStopLossPct, cfg.defaultTakeProfitPct);
+        usedFallback = true;
+      } else if(sinceLastAiCall < minGapMs){
+        log('AI cooldown active (' + Math.round(sinceLastAiCall/60000) + 'm of ' + cfg.autoScanIntervalMin + 'm) — using technicals-only ideas this scan.', '');
+        newRecs = buildFallbackRecommendations(alignedCoins, technicals, cfg.maxPositionPct, cfg.maxStopLossPct, cfg.defaultTakeProfitPct);
+        usedFallback = true;
+      } else {
+        metaEl.textContent = 'Researching ' + alignedCoins.join(', ') + ' with Anthropic…';
+        try{
+          const { system, user } = buildAgentPrompt(subsetSignals, subsetMtf, subsetAlignments);
+          const res = await fetch('https://api.anthropic.com/v1/messages', {
+            method:'POST',
+            headers:{
+              'Content-Type':'application/json',
+              'x-api-key': cfg.anthropicKey,
+              'anthropic-version':'2023-06-01',
+              'anthropic-dangerous-direct-browser-access':'true'
+            },
+            body: JSON.stringify({
+              model:'claude-sonnet-4-6',
+              max_tokens: 1000,
+              system: system,
+              messages:[{ role:'user', content: user }],
+              tools:[{ type:'web_search_20250305', name:'web_search' }]
+            })
+          });
+          const data = await res.json();
+          if(data.error){ throw new Error(data.error.message || 'Anthropic API error'); }
+
+          const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
+          let raw = textBlocks.join('\n').trim().replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim();
+          let parsed;
+          try{ parsed = JSON.parse(raw); }
+          catch(e){ throw new Error('Could not parse agent response as JSON'); }
+          newRecs = parsed.recommendations || [];
+        }catch(e){
+          log('Anthropic unavailable (' + e.message + ') — continuing with technicals-only ideas, no sentiment check this run', 'err');
+          newRecs = buildFallbackRecommendations(alignedCoins, technicals, cfg.maxPositionPct, cfg.maxStopLossPct, cfg.defaultTakeProfitPct);
+          usedFallback = true;
+        }
+        lastFullScanTime = Date.now(); // resets the AI cooldown whether the call succeeded or failed
       }
 
       if(!usedFallback){
@@ -1516,9 +1550,8 @@
 
       recommendations = newRecs.concat(recommendations).slice(0, 10);
       renderRecommendations();
-      lastFullScanTime = Date.now();
-      metaEl.textContent = 'Last scan: ' + new Date().toLocaleTimeString() + ' — ' + newRecs.length + ' idea(s) found across ' + alignedCoins.join(', ') + (usedFallback ? ' (technicals-only fallback)' : '');
-      log('Agent scan complete: ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (fallback mode)' : ''), 'ok');
+      metaEl.textContent = 'Last scan: ' + new Date().toLocaleTimeString() + ' — ' + newRecs.length + ' idea(s) found across ' + alignedCoins.join(', ') + (usedFallback ? ' (technicals-only)' : ' (AI-researched)');
+      log('Agent scan complete: ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only)' : ' (AI-researched)'), 'ok');
       notifyNewRecommendations(newRecs);
     }catch(e){
       log('Agent scan failed: ' + e.message, 'err');
@@ -1538,22 +1571,19 @@
   }
 
   async function autoScanTick(){
-    if(!cfg.autoScanEnabled || cfg.autoScanPaused || !cfg.anthropicKey) return;
+    if(!cfg.autoScanEnabled) return;
     const coins = await resolveScanCoins();
     if(!coins.length) return;
-    const minGapMs = cfg.autoScanIntervalMin * 60000;
-    const sinceLastScan = Date.now() - lastFullScanTime;
-    if(sinceLastScan < minGapMs) return;
 
     try{
       const signals = await loadSignals(coins);
       const tripped = findTrippedCoins(signals);
       if(tripped.length){
-        log('Signal triggered on '+tripped.join(', ')+' — running agent scan', 'ok');
+        log('Signal triggered on '+tripped.join(', ')+' — checking multi-timeframe alignment', 'ok');
         await runAgentScan(tripped);
       }
-      // No signal tripped: do nothing. Anthropic is only called on an actual technical trigger,
-      // never on a fixed timer.
+      // No signal tripped: do nothing. This check itself is never throttled — only the AI call
+      // inside runAgentScan is (and only if AI research is enabled).
     }catch(e){ log('Auto-scan signal check failed: ' + e.message, 'err'); }
   }
 
@@ -1869,7 +1899,7 @@
       maxLeverage: cfg.maxLeverage,
       defaultTakeProfitPct: cfg.defaultTakeProfitPct,
       maxStopLossPct: cfg.maxStopLossPct,
-      paused: cfg.autoScanPaused,
+      aiResearchEnabled: cfg.aiResearchEnabled,
       updated_at: new Date().toISOString()
     };
   }
@@ -1909,30 +1939,6 @@
     }catch(e){
       if(statusEl) statusEl.textContent = 'Publish failed: ' + e.message;
       log('Publish to GitHub failed: ' + e.message, 'err');
-    }
-  }
-
-  function updatePauseButton(){
-    const btn = document.getElementById('pauseScanBtn');
-    if(!btn) return;
-    btn.textContent = cfg.autoScanPaused ? '▶ Resume auto-scan' : '⏸ Pause auto-scan';
-    btn.classList.toggle('paused', cfg.autoScanPaused);
-  }
-
-  async function togglePauseScan(){
-    cfg.autoScanPaused = !cfg.autoScanPaused;
-    localStorage.setItem('hlDash_autoScanPaused', cfg.autoScanPaused);
-    updatePauseButton();
-    log(cfg.autoScanPaused ? 'Auto-scan paused' : 'Auto-scan resumed', 'ok');
-    if(cfg.githubPat && cfg.githubRepo){
-      await publishConfigToGitHub();
-      document.getElementById('agentMeta').textContent = cfg.autoScanPaused
-        ? 'Paused — pushed to the bot, it will skip scans until resumed.'
-        : 'Resumed — pushed to the bot.';
-    } else {
-      document.getElementById('agentMeta').textContent = cfg.autoScanPaused
-        ? 'Paused locally. Add a GitHub token in Settings to also pause the backend bot.'
-        : 'Resumed locally.';
     }
   }
 
@@ -1982,6 +1988,7 @@
     document.getElementById('openSettings').addEventListener('click', ()=>{
       document.getElementById('accountAddressInput').value = cfg.address;
       document.getElementById('agentKeyInput').value = cfg.agentKey;
+      document.getElementById('aiResearchEnabled').checked = cfg.aiResearchEnabled;
       document.getElementById('anthropicKeyInput').value = cfg.anthropicKey;
       document.getElementById('watchlistInput').value = cfg.watchlist;
       document.getElementById('filteredTopNInput').value = cfg.filteredTopN;
@@ -2019,6 +2026,7 @@
       cfg.maxLeverage = parseFloat(document.getElementById('maxLeverageInput').value) || cfg.maxLeverage;
       cfg.defaultTakeProfitPct = parseFloat(document.getElementById('defaultTakeProfitPctInput').value) || cfg.defaultTakeProfitPct;
       cfg.maxStopLossPct = parseFloat(document.getElementById('maxStopLossPctInput').value) || cfg.maxStopLossPct;
+      cfg.aiResearchEnabled = document.getElementById('aiResearchEnabled').checked;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
       publishConfigToGitHub();
@@ -2027,6 +2035,7 @@
     document.getElementById('saveSettings').addEventListener('click', ()=>{
       cfg.address = document.getElementById('accountAddressInput').value.trim();
       cfg.agentKey = document.getElementById('agentKeyInput').value.trim();
+      cfg.aiResearchEnabled = document.getElementById('aiResearchEnabled').checked;
       cfg.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
       cfg.watchlist = document.getElementById('watchlistInput').value.trim() || 'BTC,ETH,SOL,HYPE';
       cfg.filteredTopN = parseInt(document.getElementById('filteredTopNInput').value, 10) || 20;
@@ -2045,6 +2054,7 @@
       localStorage.setItem(LS_KEYS.network, cfg.network);
       localStorage.setItem(LS_KEYS.address, cfg.address);
       localStorage.setItem(LS_KEYS.agentKey, cfg.agentKey);
+      localStorage.setItem('hlDash_aiResearchEnabled', cfg.aiResearchEnabled);
       localStorage.setItem(LS_KEYS.anthropicKey, cfg.anthropicKey);
       localStorage.setItem(LS_KEYS.watchlist, cfg.watchlist);
       localStorage.setItem(LS_KEYS.scanMode, cfg.scanMode);
@@ -2126,7 +2136,6 @@
     });
 
     document.getElementById('scanBtn').addEventListener('click', ()=> runAgentScan());
-    document.getElementById('pauseScanBtn').addEventListener('click', togglePauseScan);
     document.getElementById('emergencyExitBtn').addEventListener('click', emergencyExitAll);
 
     document.getElementById('expandLogBtn').addEventListener('click', ()=>{
@@ -2186,7 +2195,6 @@
   async function boot(){
     wireUi();
     initChart();
-    updatePauseButton();
     await loadMeta();
     await loadMids();
     await loadCandles();
