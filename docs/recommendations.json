@@ -1,3 +1,453 @@
 {
-  "recommendations": []
+  "recommendations": [
+    {
+      "coin": "BTC",
+      "direction": "long",
+      "conviction": "low",
+      "pattern": "bullish_belt_hold",
+      "indicators_confirming": [
+        "candlestick pattern",
+        "MACD histogram positive",
+        "price at lower Bollinger Band"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 3,
+      "rationale": "Technical confluence only: candlestick pattern, MACD histogram positive, price at lower Bollinger Band. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 77781,
+      "stop_loss_price": 76442.29,
+      "take_profit_price": 79789.06,
+      "suggested_size_pct_equity": 7,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 77506.08,
+          "tests": 12
+        },
+        {
+          "price": 76488.33,
+          "tests": 3
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 77080.22,
+          "tests": 9
+        },
+        {
+          "price": 75782.5,
+          "tests": 2
+        }
+      ],
+      "chart_patterns": [],
+      "id": "3ozmcd9h7o",
+      "generated_at": "2026-08-23T21:48:12.515Z",
+      "expires_at": "2026-08-23T22:18:12.516Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "chart_candles": {
+        "opens": [
+          77455,
+          77317,
+          77293,
+          77268,
+          77234,
+          77381,
+          77392,
+          77369,
+          77379,
+          77355,
+          77394,
+          77479,
+          77375,
+          77308,
+          77410,
+          77455,
+          77431,
+          77751,
+          78099,
+          77683
+        ],
+        "highs": [
+          77482,
+          77424,
+          77339,
+          77355,
+          77446,
+          77447,
+          77397,
+          77377,
+          77451,
+          77432,
+          77488,
+          77511,
+          77375,
+          77440,
+          77481,
+          77475,
+          77752,
+          78118,
+          78110,
+          77809
+        ],
+        "lows": [
+          77178,
+          77229,
+          77194,
+          77241,
+          77150,
+          77307,
+          77337,
+          77301,
+          77285,
+          77329,
+          77291,
+          77358,
+          77225,
+          77301,
+          77410,
+          77424,
+          77431,
+          77743,
+          77604,
+          77683
+        ],
+        "closes": [
+          77316,
+          77293,
+          77267,
+          77241,
+          77382,
+          77393,
+          77370,
+          77377,
+          77355,
+          77393,
+          77482,
+          77375,
+          77307,
+          77411,
+          77455,
+          77430,
+          77751,
+          78099,
+          77683,
+          77781
+        ]
+      },
+      "chart_image_sent": true,
+      "telegram_message_id": 54,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "SOL",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "MACD histogram negative",
+        "price at upper Bollinger Band"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 2,
+      "rationale": "Technical confluence only: MACD histogram negative, price at upper Bollinger Band. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 95.358,
+      "stop_loss_price": 96.42,
+      "take_profit_price": 93.77,
+      "suggested_size_pct_equity": 7,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 95.73,
+          "tests": 5
+        },
+        {
+          "price": 94.82,
+          "tests": 3
+        },
+        {
+          "price": 94.12,
+          "tests": 2
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 93.37,
+          "tests": 4
+        },
+        {
+          "price": 94.03,
+          "tests": 3
+        },
+        {
+          "price": 92.5,
+          "tests": 2
+        }
+      ],
+      "chart_patterns": [],
+      "id": "68reae9ivy",
+      "generated_at": "2026-08-23T21:48:12.515Z",
+      "expires_at": "2026-08-23T22:18:12.516Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "chart_candles": {
+        "opens": [
+          95.464,
+          95.437,
+          95.208,
+          95.151,
+          95.154,
+          95.258,
+          95.402,
+          95.324,
+          95.341,
+          95.1,
+          95.098,
+          95.339,
+          95.121,
+          95.084,
+          95.285,
+          95.205,
+          95.085,
+          95.694,
+          96.167,
+          95.309
+        ],
+        "highs": [
+          95.533,
+          95.549,
+          95.277,
+          95.316,
+          95.4,
+          95.477,
+          95.426,
+          95.372,
+          95.435,
+          95.173,
+          95.403,
+          95.49,
+          95.181,
+          95.403,
+          95.391,
+          95.205,
+          95.783,
+          96.236,
+          96.319,
+          95.431
+        ],
+        "lows": [
+          94.908,
+          95.167,
+          94.845,
+          95.112,
+          94.951,
+          95.161,
+          95.145,
+          95.161,
+          94.936,
+          95.009,
+          94.87,
+          95.106,
+          94.808,
+          95.059,
+          95.155,
+          95.042,
+          95.085,
+          95.693,
+          95.227,
+          95.309
+        ],
+        "closes": [
+          95.438,
+          95.208,
+          95.153,
+          95.153,
+          95.271,
+          95.402,
+          95.324,
+          95.341,
+          95.099,
+          95.098,
+          95.339,
+          95.106,
+          95.084,
+          95.285,
+          95.208,
+          95.084,
+          95.694,
+          96.167,
+          95.309,
+          95.358
+        ]
+      },
+      "chart_image_sent": true,
+      "telegram_message_id": 56,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "AVAX",
+      "direction": "long",
+      "conviction": "low",
+      "pattern": "bullish_harami",
+      "indicators_confirming": [
+        "candlestick pattern",
+        "MACD histogram positive"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 2,
+      "rationale": "Technical confluence only: candlestick pattern, MACD histogram positive. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 7.6312,
+      "stop_loss_price": 7.37,
+      "take_profit_price": 8.02,
+      "suggested_size_pct_equity": 7,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 7.6,
+          "tests": 5
+        },
+        {
+          "price": 7.46,
+          "tests": 3
+        },
+        {
+          "price": 7.53,
+          "tests": 2
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 7.42,
+          "tests": 5
+        },
+        {
+          "price": 7.53,
+          "tests": 4
+        },
+        {
+          "price": 7.28,
+          "tests": 1
+        }
+      ],
+      "chart_patterns": [],
+      "id": "wyrtb79k22",
+      "generated_at": "2026-08-23T21:48:12.515Z",
+      "expires_at": "2026-08-23T22:18:12.516Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "chart_candles": {
+        "opens": [
+          7.5869,
+          7.5901,
+          7.5645,
+          7.5537,
+          7.5474,
+          7.5829,
+          7.5811,
+          7.5822,
+          7.588,
+          7.563,
+          7.5596,
+          7.578,
+          7.5438,
+          7.5442,
+          7.5636,
+          7.5711,
+          7.5775,
+          7.634,
+          7.6775,
+          7.6269
+        ],
+        "highs": [
+          7.6003,
+          7.6034,
+          7.5766,
+          7.5674,
+          7.5894,
+          7.5894,
+          7.5872,
+          7.5899,
+          7.5959,
+          7.5736,
+          7.577,
+          7.5886,
+          7.5503,
+          7.5743,
+          7.5737,
+          7.5776,
+          7.6367,
+          7.6771,
+          7.6817,
+          7.6394
+        ],
+        "lows": [
+          7.5387,
+          7.52,
+          7.5369,
+          7.5427,
+          7.5445,
+          7.5684,
+          7.5748,
+          7.574,
+          7.5509,
+          7.5587,
+          7.5415,
+          7.5514,
+          7.5158,
+          7.5423,
+          7.5617,
+          7.5658,
+          7.5775,
+          7.6334,
+          7.6185,
+          7.6269
+        ],
+        "closes": [
+          7.5937,
+          7.5611,
+          7.5552,
+          7.5474,
+          7.5875,
+          7.5871,
+          7.5806,
+          7.5873,
+          7.5682,
+          7.5638,
+          7.5759,
+          7.5532,
+          7.5413,
+          7.5712,
+          7.5737,
+          7.5776,
+          7.6308,
+          7.6744,
+          7.6234,
+          7.6312
+        ]
+      },
+      "chart_image_sent": true,
+      "telegram_message_id": 58,
+      "telegram_chat_id": "1820130237"
+    }
+  ]
 }
