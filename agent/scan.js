@@ -1,8 +1,9 @@
 // JARVIS Trade Agent — backend scanner
 //
-// Cheap, free order-book/volume checks happen every run; Anthropic (with web search) is only
-// called when a coin actually trips a technical threshold. There is no timer-based fallback —
-// if nothing trips, nothing gets called, no matter how long it's been.
+// Technical checks (order-book/volume signals, multi-timeframe alignment) run every scheduled
+// run, unconditionally — they're free. Whether Anthropic gets called on top of that is controlled
+// independently by AI_RESEARCH_ENABLED (a toggle) and, when enabled, a cooldown that throttles how
+// often the paid call fires. Turn AI research off entirely to run on technicals-only ideas forever.
 //
 // This script NEVER touches a Hyperliquid private key and NEVER places trades.
 // It only researches and alerts (Telegram + a JSON feed the dashboard reads).
@@ -29,6 +30,7 @@ let MAX_STOP_LOSS_PCT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
 let MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
 let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
 let DEFAULT_TAKE_PROFIT_PCT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
+let AI_RESEARCH_ENABLED = (process.env.AI_RESEARCH_ENABLED || 'true').toLowerCase() !== 'false';
 
 function shortId(){
   return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -560,13 +562,7 @@ function formatTelegramMessage(rec){
 }
 
 async function main(){
-  if(!ANTHROPIC_API_KEY){ console.log('No ANTHROPIC_API_KEY set, exiting.'); return; }
-
   const shared = loadSharedConfig();
-  if(shared && shared.paused){
-    console.log('Scanner is paused via the dashboard. Skipping this run.');
-    return;
-  }
   if(shared){
     if(shared.watchlist) WATCHLIST = shared.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
     if(shared.scanMode) SCAN_MODE = shared.scanMode;
@@ -577,28 +573,24 @@ async function main(){
     if(shared.maxPositionPct) MAX_POSITION_PCT = parseFloat(shared.maxPositionPct);
     if(shared.maxLeverage) MAX_LEVERAGE = parseFloat(shared.maxLeverage);
     if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
+    if(shared.aiResearchEnabled !== undefined) AI_RESEARCH_ENABLED = !!shared.aiResearchEnabled;
   }
+  console.log('AI research is ' + (AI_RESEARCH_ENABLED ? 'ENABLED' : 'DISABLED') + ' this run.');
 
   const allCoins = await resolveCoins();
   if(!allCoins.length){ console.log('No coins resolved (empty watchlist, or filtered-universe thresholds too strict), exiting.'); return; }
 
-  const state = readJson(STATE_PATH, { lastFullScanTime: 0, recentIds: [] });
+  const state = readJson(STATE_PATH, { lastAiCallTime: 0, recentIds: [] });
   const feed = readJson(FEED_PATH, { recommendations: [] });
 
-  const minGapMs = INTERVAL_MIN * 60000;
-  const sinceLastScan = Date.now() - (state.lastFullScanTime || 0);
-
-  if(sinceLastScan < minGapMs){
-    console.log(`Cooldown active (${Math.round(sinceLastScan/60000)}m of ${INTERVAL_MIN}m min gap). Skipping.`);
-    return;
-  }
-
+  // Technical checks run every time, unconditionally — they're free. Nothing below this line
+  // is gated by any cooldown until the point where Anthropic itself might get called.
   console.log(`Checking signals (${SCAN_MODE} mode) for: ` + allCoins.join(', '));
   const signals = await loadSignals(allCoins);
   const tripped = findTrippedCoins(signals);
 
   if(!tripped.length){
-    console.log('No signal tripped. Not calling Anthropic — nothing to do this run.');
+    console.log('No signal tripped this run.');
     return;
   }
   console.log('Signal tripped on: ' + tripped.join(', '));
@@ -611,12 +603,19 @@ async function main(){
     alignments[c] = computeAlignment(mtfData[c]);
     console.log(`  ${c}: ${alignments[c].direction ? alignments[c].direction.toUpperCase() : 'no alignment'} (${alignments[c].agree}/${alignments[c].total} timeframes agree)`);
   }
-  const scanCoins = tripped.filter(c => alignments[c].direction !== null);
+  let scanCoins = tripped.filter(c => alignments[c].direction !== null);
 
   if(!scanCoins.length){
-    console.log('No coin reached multi-timeframe alignment (need at least 2/3 of 15m/1h/4h agreeing). Not calling Anthropic — nothing to do this run.');
+    console.log('No coin reached multi-timeframe alignment (need at least 2/3 of 15m/1h/4h agreeing). Nothing to do this run.');
     return;
   }
+
+  // Don't pile up duplicate outstanding recommendations for a coin that's already pending review.
+  const alreadyPending = new Set((feed.recommendations || []).filter(r => r.status === 'pending').map(r => r.coin));
+  const skippedAsPending = scanCoins.filter(c => alreadyPending.has(c));
+  scanCoins = scanCoins.filter(c => !alreadyPending.has(c));
+  if(skippedAsPending.length) console.log('Skipping (already has a pending recommendation): ' + skippedAsPending.join(', '));
+  if(!scanCoins.length){ console.log('Nothing new to propose this run.'); return; }
 
   const subsetSignals = {};
   scanCoins.forEach(c => { if(signals[c]) subsetSignals[c] = signals[c]; });
@@ -629,21 +628,40 @@ async function main(){
   const technicals = {};
   scanCoins.forEach(c => { technicals[c] = mtfData[c]['15m']; });
 
-  const { system, user } = buildAgentPrompt(subsetSignals, subsetMtf, subsetAlignments);
-
-  console.log('Calling Anthropic for research on: ' + scanCoins.join(', '));
+  // Only the AI call itself is gated: by the toggle, and — when enabled — by a cooldown so it
+  // doesn't fire on every single run. Technicals-only ideas are always free to generate.
   let newRecs;
   let usedFallback = false;
-  try{
-    const parsed = await callAnthropic(system, user);
-    newRecs = parsed.recommendations || [];
-  }catch(e){
-    console.error('Anthropic call failed: ' + e.message);
-    console.log('Continuing with technicals-only fallback (no sentiment/news check this run).');
+  const minGapMs = INTERVAL_MIN * 60000;
+  const sinceLastAiCall = Date.now() - (state.lastAiCallTime || 0);
+
+  if(!AI_RESEARCH_ENABLED){
+    console.log('AI research is disabled via the toggle — generating technicals-only ideas.');
     newRecs = buildFallbackRecommendations(scanCoins, technicals, MAX_POSITION_PCT, MAX_LEVERAGE, MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT);
     usedFallback = true;
+  } else if(!ANTHROPIC_API_KEY){
+    console.log('AI research is enabled but no ANTHROPIC_API_KEY is set — generating technicals-only ideas instead.');
+    newRecs = buildFallbackRecommendations(scanCoins, technicals, MAX_POSITION_PCT, MAX_LEVERAGE, MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT);
+    usedFallback = true;
+  } else if(sinceLastAiCall < minGapMs){
+    console.log(`AI cooldown active (${Math.round(sinceLastAiCall/60000)}m of ${INTERVAL_MIN}m min gap) — using technicals-only this run instead of calling Anthropic.`);
+    newRecs = buildFallbackRecommendations(scanCoins, technicals, MAX_POSITION_PCT, MAX_LEVERAGE, MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT);
+    usedFallback = true;
+  } else {
+    const { system, user } = buildAgentPrompt(subsetSignals, subsetMtf, subsetAlignments);
+    console.log('Calling Anthropic for research on: ' + scanCoins.join(', '));
+    try{
+      const parsed = await callAnthropic(system, user);
+      newRecs = parsed.recommendations || [];
+    }catch(e){
+      console.error('Anthropic call failed: ' + e.message);
+      console.log('Continuing with technicals-only fallback (no sentiment/news check this run).');
+      newRecs = buildFallbackRecommendations(scanCoins, technicals, MAX_POSITION_PCT, MAX_LEVERAGE, MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT);
+      usedFallback = true;
+    }
+    state.lastAiCallTime = Date.now(); // resets the cooldown whether the call succeeded or failed
   }
-  console.log('Got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only fallback)' : '') + '.');
+  console.log('Got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only)' : ' (AI-researched)') + '.');
 
   if(!usedFallback){
     newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT));
@@ -674,8 +692,6 @@ async function main(){
 
   feed.recommendations = newRecs.concat(feed.recommendations || []).slice(0, 30);
   writeJson(FEED_PATH, feed);
-
-  state.lastFullScanTime = Date.now();
   writeJson(STATE_PATH, state);
 
   console.log('Done.');
