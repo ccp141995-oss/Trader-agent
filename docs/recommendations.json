@@ -1,6 +1,189 @@
 {
   "recommendations": [
     {
+      "coin": "BTC",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "MACD histogram negative",
+        "price at upper Bollinger Band"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 2,
+      "rationale": "Technical confluence only: MACD histogram negative, price at upper Bollinger Band. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 77448,
+      "stop_loss_price": 77873.79,
+      "take_profit_price": 76809.32,
+      "suggested_size_pct_equity": 12.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 77506.08,
+          "tests": 12
+        },
+        {
+          "price": 76488.33,
+          "tests": 3
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 77080.22,
+          "tests": 9
+        },
+        {
+          "price": 75782.5,
+          "tests": 2
+        }
+      ],
+      "chart_patterns": [],
+      "id": "bcf0cxcmz1",
+      "generated_at": "2026-08-23T20:54:40.717Z",
+      "expires_at": "2026-08-23T21:24:40.717Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 50,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "ETH",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "MACD histogram negative",
+        "price at upper Bollinger Band",
+        "bearish chart pattern"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 3,
+      "rationale": "Technical confluence only: MACD histogram negative, price at upper Bollinger Band, bearish chart pattern. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 2449.1,
+      "stop_loss_price": 2488.27,
+      "take_profit_price": 2390.34,
+      "suggested_size_pct_equity": 12.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 2430.77,
+          "tests": 7
+        },
+        {
+          "price": 2453.47,
+          "tests": 4
+        },
+        {
+          "price": 2397.7,
+          "tests": 1
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 2387.55,
+          "tests": 2
+        },
+        {
+          "price": 2406.2,
+          "tests": 2
+        },
+        {
+          "price": 2420.55,
+          "tests": 2
+        }
+      ],
+      "chart_patterns": [
+        {
+          "name": "head_and_shoulders",
+          "neckline": 2435.7,
+          "confirmed": false
+        }
+      ],
+      "id": "ml8kgwcnek",
+      "generated_at": "2026-08-23T20:54:40.717Z",
+      "expires_at": "2026-08-23T21:24:40.717Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 51,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "AVAX",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "advance_block, deliberation",
+      "indicators_confirming": [
+        "candlestick pattern",
+        "MACD histogram negative",
+        "price at upper Bollinger Band"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 3,
+      "rationale": "Technical confluence only: candlestick pattern, MACD histogram negative, price at upper Bollinger Band. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 7.5747,
+      "stop_loss_price": 7.67,
+      "take_profit_price": 7.43,
+      "suggested_size_pct_equity": 12.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 7.6,
+          "tests": 5
+        },
+        {
+          "price": 7.46,
+          "tests": 3
+        },
+        {
+          "price": 7.53,
+          "tests": 2
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 7.42,
+          "tests": 5
+        },
+        {
+          "price": 7.53,
+          "tests": 4
+        },
+        {
+          "price": 7.28,
+          "tests": 1
+        }
+      ],
+      "chart_patterns": [],
+      "id": "mg9dcecntz",
+      "generated_at": "2026-08-23T20:54:40.717Z",
+      "expires_at": "2026-08-23T21:24:40.717Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 52,
+      "telegram_chat_id": "1820130237"
+    },
+    {
       "coin": "LDO",
       "direction": "long",
       "pattern": "three_white_soldiers on 1h with fresh OI long buildup",
