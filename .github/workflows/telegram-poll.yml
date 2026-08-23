@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: trade-agent-telegram-poll
+  group: jarvis-trade-agent-git
   cancel-in-progress: false
 
 jobs:
@@ -42,6 +42,8 @@ jobs:
           MAX_LEVERAGE: ${{ vars.MAX_LEVERAGE }}
           DEFAULT_TAKE_PROFIT_PCT: ${{ vars.DEFAULT_TAKE_PROFIT_PCT }}
           MAX_STOP_LOSS_PCT: ${{ vars.MAX_STOP_LOSS_PCT }}
+          MAX_TAKE_PROFIT_PCT: ${{ vars.MAX_TAKE_PROFIT_PCT }}
+          MAX_ENTRY_DEVIATION_PCT: ${{ vars.MAX_ENTRY_DEVIATION_PCT }}
           EXECUTION_WINDOW_MIN: ${{ vars.EXECUTION_WINDOW_MIN }}
         run: node agent/poll_telegram.js
 
@@ -56,6 +58,7 @@ jobs:
           fi
           git commit -m "Telegram poll update"
           for i in 1 2 3 4 5; do
+            git rebase --abort 2>/dev/null || true
             if git pull --rebase && git push; then
               echo "Pushed on attempt $i."
               exit 0
@@ -63,6 +66,7 @@ jobs:
             echo "Push attempt $i failed (likely racing with the scanner workflow) — retrying..."
             sleep $(( (RANDOM % 5) + 3 ))
           done
+          git rebase --abort 2>/dev/null || true
           echo "Could not push after 5 attempts. Nothing further to do this run; the next scheduled run will pick up from here."
           exit 1
 
