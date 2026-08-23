@@ -2,8 +2,8 @@
   "watchlist": "BTC,ETH,SOL,HYPE",
   "scanMode": "filtered",
   "filteredTopN": 50,
-  "filteredMinOI": 1000000,
-  "filteredMinVolume24h": 2000000,
+  "filteredMinOI": 100000,
+  "filteredMinVolume24h": 199984,
   "maxPositionPct": 25,
   "maxLeverage": 3,
   "defaultTakeProfitPct": 50,
@@ -12,5 +12,5 @@
   "maxEntryDeviationPct": 2,
   "aiResearchEnabled": true,
   "autoTradeEnabled": false,
-  "updated_at": "2026-08-23T18:04:43.607Z"
+  "updated_at": "2026-08-23T18:12:18.000Z"
 }
