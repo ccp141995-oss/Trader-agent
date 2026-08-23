@@ -1,4 +1,16 @@
 {
-  "lastAiCallTime": 0,
-  "recentIds": []
+  "lastAiCallTime": 1787507445363,
+  "recentIds": [],
+  "lastOiByCoin": {
+    "BTC": 36218.35556,
+    "ETH": 788917.8669999999,
+    "SOL": 4974392.3,
+    "HYPE": 24765497.020000007
+  },
+  "lastPriceByCoin": {
+    "BTC": 77279,
+    "ETH": 2441,
+    "SOL": 95.1396,
+    "HYPE": 80.088
+  }
 }
