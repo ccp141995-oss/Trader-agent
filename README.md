@@ -178,12 +178,36 @@ The header now shows **both** Perps USDC and Spot USDC as separate chips, refres
 
 Recommendation messages are plain bullet lists — coin/direction/conviction header (with confluence score and self-consistency badge), pattern, confirming indicators, confluence factors, rationale, the counterthesis and why it's proposed anyway, horizon, entry/stop/target, resistance and support levels with touch counts, chart patterns, sizing, and any risk flags. No "not financial advice" disclaimer and no mention of which AI provider is behind it — just the trade information itself. Execution results (confirmed/failed/auto-traded) follow the same bullet format, including per-order fill status and the account snapshot.
 
+## Scan/analysis/Telegram sequencing
+
+`scan.js`'s pipeline was already fully sequential in code — signals, then multi-timeframe alignment, then AI/fallback analysis, then risk-bounding, and only after all of that does it ever send a Telegram message. Added explicit `PHASE 1/2/3` log markers so this is provable in the Actions logs, not just asserted. The more likely real cause of overlapping-feeling messages: the Telegram poller was long-polling for ~4 of its 5-minute cycle, and since it shares a concurrency lock with the scanner (to prevent the git-conflict bug from earlier), the scanner spent most of its time queued right behind it — so a scan result could land moments after a poller message, looking like simultaneous activity even though it wasn't. Shortened the poller's window to 2.5 minutes to give the scanner more breathing room in that shared queue.
+
+## Trend strength (ADX)
+
+Separate from the directional bias already in place, every timeframe now also gets an ADX(14) reading — a standard, independent measure of *how strongly* a market is trending, not just which way. ADX ≥25 reads as genuinely trending, below 20 as weak/ranging. This is computed in code (Wilder smoothing, the standard method) and feeds in two places: the prompt (so the model knows whether to trust the directional signal it's seeing), and `computeConviction()` as an objective bonus point — a strong trend on the 15m reference timeframe adds to the confluence score the same way a confirmed pattern does, but it's never self-reported by the model, so it can't be padded.
+
+## Chart screenshots
+
+Every recommendation now includes an actual candlestick chart image — the last 20 x 15m candles with entry/stop/target marked as horizontal lines — so you can visually sanity-check the pattern in a few seconds rather than trusting the text description alone.
+
+**How it's built**: rendered via QuickChart.io (a free, widely-used chart-rendering API) using a POST request — not a GET-encoded URL, which for ~20 candles of OHLC data runs past 4,000 characters and risks silent truncation or rejection by either QuickChart or Telegram. POST has no such limit and returns PNG bytes directly. On the backend, those bytes get uploaded to Telegram via `sendPhoto` as multipart form data (using Node's built-in `FormData`/`Blob`, no extra dependency). On the dashboard, the same POST call returns a blob that becomes a local object URL for inline `<img>` display.
+
+**This is best-effort, not a hard gate**: if QuickChart is unreachable or the render fails, the recommendation still sends — you get the full text description either way, just without the image, and the failure is logged clearly. A recommendation's validity was never made to depend on a third-party image service staying up.
+
+**Worth knowing**: I couldn't test the actual rendered output from this environment (no network access in my build sandbox) — the chart config follows QuickChart's documented `chartjs-chart-financial` + `chartjs-plugin-annotation` format, but if the first chart you receive looks wrong (candles missing, annotations misplaced), let me know and I'll adjust the config.
+
+## Recommendation history log
+
+A new **History** tab in the dashboard (separate from the live Agent tab) captures every recommendation the dashboard has ever seen — from manual scans and from the backend bot synced over Telegram — independent of whether it's still pending. Each entry can be expanded to show the full rationale, counterthesis, confluence factors, support/resistance, chart patterns, and the chart screenshot (re-rendered on demand from the saved candle data, not stored as a giant image blob). **Clear all history** wipes the whole log; each entry also has its own **Delete**. This is a local, browser-side log (localStorage, capped at 150 entries) — it doesn't modify the backend's `recommendations.json`, so clearing it here has no effect on the bot.
+
+The same **Expand** control was added to the live Agent tab's recommendation cards too, so you can read the full analysis and see the chart without needing to open the trade-confirm modal.
+
 ## The AI research pipeline
 
 This changed substantially from earlier versions — worth understanding as one piece:
 
 - **No web search, no sentiment, no news.** The model's entire basis is technical and market-structure analysis: candlestick and chart patterns, indicators, support/resistance with touch counts, order-book imbalance, and open-interest momentum. It has no other input and is told so directly in the prompt.
-- **Conviction is computed, not claimed.** The model reports which of 7 confluence factors are genuinely present (candlestick pattern, chart pattern, MACD agreement, RSI agreement, Bollinger position, support/resistance confluence, OI momentum) — honestly, since padding the list doesn't change anything downstream. Conviction (high/medium/low) is then derived from that count in code. The model never gets to just assert "high conviction."
+- **Conviction is computed, not claimed.** The model reports which of 7 self-assessed confluence factors are genuinely present (candlestick pattern, chart pattern, MACD agreement, RSI agreement, Bollinger position, support/resistance confluence, OI momentum) — honestly, since padding the list doesn't change anything downstream. An 8th factor — genuine trend strength (ADX ≥25) — is added automatically in code, not self-reported, since it's objective data we already compute (see "Trend strength" above). Conviction (high/medium/low) is derived from the combined count. The model never gets to just assert "high conviction."
 - **Open interest momentum** is tracked across runs (persisted in `state.json`): rising OI with rising price reads as a fresh long buildup — a stronger signal than the same price move on falling OI, which usually just means short-covering. This is fed into every prompt.
 - **Devil's advocate**: before finalizing each idea, the model has to name the single strongest reason the trade could fail (`counterthesis`) and briefly justify proposing it anyway (`counterthesis_response`). If it can't credibly do both, it's told to drop the idea.
 - **Self-consistency (ensemble) check**: every AI-researched cycle calls Anthropic twice in parallel with the identical prompt. Only recommendations that reproduce on *both* passes — same coin, same direction — survive; everything else is silently dropped. Surviving recs merge conservatively: the tighter (safer) of the two stops, the smaller of the two sizes/leverages. This roughly doubles the API cost of a triggered scan but meaningfully raises the bar for what actually reaches you.
