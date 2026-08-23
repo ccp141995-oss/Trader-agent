@@ -3,14 +3,14 @@
   "scanMode": "filtered",
   "filteredTopN": 50,
   "filteredMinOI": 100000,
-  "filteredMinVolume24h": 199984,
+  "filteredMinVolume24h": 200000,
   "maxPositionPct": 25,
   "maxLeverage": 3,
   "defaultTakeProfitPct": 50,
   "maxStopLossPct": 20,
   "maxTakeProfitPct": 150,
   "maxEntryDeviationPct": 2,
-  "aiResearchEnabled": false,
+  "aiResearchEnabled": true,
   "autoTradeEnabled": false,
-  "updated_at": "2026-08-23T18:21:55.895Z"
+  "updated_at": "2026-08-23T19:07:17.278Z"
 }
