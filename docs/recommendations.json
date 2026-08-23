@@ -297,7 +297,7 @@
       "generated_at": "2026-08-23T13:47:09.244Z",
       "expires_at": "2026-08-23T16:47:09.245Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 29,
       "telegram_chat_id": "1820130237"
     },
@@ -327,7 +327,7 @@
       "generated_at": "2026-08-23T13:47:09.244Z",
       "expires_at": "2026-08-23T16:47:09.245Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 30,
       "telegram_chat_id": "1820130237"
     },
@@ -357,7 +357,7 @@
       "generated_at": "2026-08-23T13:47:09.244Z",
       "expires_at": "2026-08-23T16:47:09.245Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 31,
       "telegram_chat_id": "1820130237"
     },
