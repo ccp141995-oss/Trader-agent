@@ -27,10 +27,13 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
 let MAX_STOP_LOSS_PCT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
+let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
+let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
 let MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
 let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
 let DEFAULT_TAKE_PROFIT_PCT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
 let AI_RESEARCH_ENABLED = (process.env.AI_RESEARCH_ENABLED || 'true').toLowerCase() !== 'false';
+let AUTO_TRADE_ENABLED = (process.env.AUTO_TRADE_ENABLED || 'false').toLowerCase() === 'true';
 
 function shortId(){
   return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -165,22 +168,202 @@ function macdCalc(closes){
   return { macd, signal, hist: (macd!=null && signal!=null) ? macd-signal : null };
 }
 
+function body(o,c){ return Math.abs(c-o); }
+function rng(h,l){ return (h-l) || 1e-9; }
+function bull(o,c){ return c>o; }
+function bear(o,c){ return c<o; }
+function upW(o,h,c){ return h - Math.max(o,c); }
+function loW(o,l,c){ return Math.min(o,c) - l; }
+function trendBefore(closes, endIdxExclusive, lookback){
+  const start = Math.max(0, endIdxExclusive - lookback);
+  if(endIdxExclusive - start < 2) return 'flat';
+  const first = closes[start], last = closes[endIdxExclusive-1];
+  const chg = (last-first)/ (Math.abs(first)||1e-9);
+  if(chg <= -0.003) return 'down';
+  if(chg >= 0.003) return 'up';
+  return 'flat';
+}
+
 function detectPatterns(opens, highs, lows, closes){
   const n = closes.length;
-  if(n < 3) return [];
-  const patterns = [];
-  const o1=opens[n-1], c1=closes[n-1], h1=highs[n-1], l1=lows[n-1];
-  const o2=opens[n-2], c2=closes[n-2];
-  const body1 = Math.abs(c1-o1);
-  const range1 = (h1-l1) || 1e-9;
-  if(c2<o2 && c1>o1 && o1<=c2 && c1>=o2) patterns.push('bullish_engulfing');
-  if(c2>o2 && c1<o1 && o1>=c2 && c1<=o2) patterns.push('bearish_engulfing');
-  if(body1/range1 < 0.1) patterns.push('doji');
-  const upperWick1 = h1 - Math.max(o1,c1);
-  const lowerWick1 = Math.min(o1,c1) - l1;
-  if(lowerWick1 >= 2*body1 && upperWick1 <= body1*0.5 && body1/range1 < 0.4) patterns.push('hammer');
-  if(upperWick1 >= 2*body1 && lowerWick1 <= body1*0.5 && body1/range1 < 0.4) patterns.push('shooting_star');
-  return patterns;
+  if(n < 2) return [];
+  const P = [];
+  const idx = (k) => n-1-k;
+  const O=i=>opens[i], C=i=>closes[i], H=i=>highs[i], L=i=>lows[i];
+
+  const i1=idx(0);
+  const o1=O(i1),c1=C(i1),h1=H(i1),l1=L(i1);
+  const body1=body(o1,c1), range1=rng(h1,l1);
+  const uw1=upW(o1,h1,c1), lw1=loW(o1,l1,c1);
+  const trendPre1 = trendBefore(closes, i1, 5);
+
+  // ---- Single candle ----
+  if(body1/range1 < 0.1) P.push('doji');
+  if(body1/range1 < 0.1 && lw1/range1 > 0.6 && uw1/range1 < 0.15) P.push('dragonfly_doji');
+  if(body1/range1 < 0.1 && uw1/range1 > 0.6 && lw1/range1 < 0.15) P.push('gravestone_doji');
+  if(lw1 >= 2*body1 && uw1 <= body1*0.5 && body1/range1 < 0.4 && trendPre1==='down') P.push('hammer');
+  if(lw1 >= 2*body1 && uw1 <= body1*0.5 && body1/range1 < 0.4 && trendPre1==='up') P.push('hanging_man');
+  if(uw1 >= 2*body1 && lw1 <= body1*0.5 && body1/range1 < 0.4 && trendPre1==='down') P.push('inverted_hammer');
+  if(uw1 >= 2*body1 && lw1 <= body1*0.5 && body1/range1 < 0.4 && trendPre1==='up') P.push('shooting_star');
+  if(bull(o1,c1) && body1/range1 > 0.7 && lw1/range1 < 0.05) P.push('bullish_belt_hold');
+  if(bear(o1,c1) && body1/range1 > 0.7 && uw1/range1 < 0.05) P.push('bearish_belt_hold');
+
+  // ---- Two candle ----
+  if(n>=2){
+    const i2=idx(1);
+    const o2=O(i2),c2=C(i2),h2=H(i2),l2=L(i2);
+    const body2=body(o2,c2), range2=rng(h2,l2);
+
+    if(bear(o2,c2) && bull(o1,c1) && o1<=c2 && c1>=o2) P.push('bullish_engulfing');
+    if(bull(o2,c2) && bear(o1,c1) && o1>=c2 && c1<=o2) P.push('bearish_engulfing');
+
+    if(bear(o2,c2) && bull(o1,c1) && o1>c2 && c1<o2 && body1<body2){
+      P.push(body1/range1 < 0.15 ? 'bullish_harami_cross' : 'bullish_harami');
+    }
+    if(bull(o2,c2) && bear(o1,c1) && o1<c2 && c1>o2 && body1<body2){
+      P.push(body1/range1 < 0.15 ? 'bearish_harami_cross' : 'bearish_harami');
+    }
+
+    const mid2 = (o2+c2)/2;
+    if(bear(o2,c2) && bull(o1,c1) && o1<l2 && c1>mid2 && c1<o2) P.push('piercing_line');
+    if(bull(o2,c2) && bear(o1,c1) && o1>h2 && c1<mid2 && c1>o2) P.push('dark_cloud_cover');
+
+    // Thrusting / on-neck / in-neck: bearish continuation, small bullish penetration into a
+    // prior bearish candle that falls short of piercing_line's midpoint requirement.
+    if(bear(o2,c2) && bull(o1,c1) && o1<c2 && c1<=mid2){
+      const closeTol = range2*0.05;
+      if(Math.abs(c1-l2) <= closeTol) P.push('on_neck');
+      else if(Math.abs(c1-c2) <= closeTol) P.push('in_neck');
+      else if(c1>c2) P.push('thrusting');
+    }
+
+    const marubozu2 = body2/range2 > 0.85;
+    const marubozu1 = body1/range1 > 0.85;
+    if(marubozu1 && marubozu2){
+      if(bear(o2,c2) && bull(o1,c1) && o1>c2) P.push('bullish_kicking');
+      if(bull(o2,c2) && bear(o1,c1) && o1<c2) P.push('bearish_kicking');
+    }
+
+    const closeTol1 = range1*0.05;
+    if(bear(o2,c2) && bull(o1,c1) && Math.abs(c1-c2)<=closeTol1) P.push('bullish_meeting_lines');
+    if(bull(o2,c2) && bear(o1,c1) && Math.abs(c1-c2)<=closeTol1) P.push('bearish_meeting_lines');
+    if(bear(o2,c2) && bear(o1,c1) && Math.abs(c1-c2)<=closeTol1) P.push('matching_low');
+
+    const openTol1 = range1*0.05;
+    if(bear(o2,c2) && bull(o1,c1) && Math.abs(o1-o2)<=openTol1) P.push('bullish_separating_lines');
+    if(bull(o2,c2) && bear(o1,c1) && Math.abs(o1-o2)<=openTol1) P.push('bearish_separating_lines');
+
+    // Side-by-side lines: two same-colored candles after a gap in trend direction (approximate
+    // "gap" as candle1 opening beyond candle2's body — true gaps are rare in continuous markets).
+    if(bull(o2,c2) && bull(o1,c1) && o1>=c2 && Math.abs(o1-o2)<=openTol1) P.push('bullish_side_by_side_white_lines');
+    if(bear(o2,c2) && bear(o1,c1) && o1<=c2 && Math.abs(o1-o2)<=openTol1) P.push('bearish_side_by_side_black_lines');
+  }
+
+  // ---- Three candle ----
+  if(n >= 3){
+    const iA=idx(2), iB=idx(1), iC=idx(0);
+    const oA=O(iA),cA=C(iA),hA=H(iA),lA=L(iA);
+    const oB=O(iB),cB=C(iB),hB=H(iB),lB=L(iB);
+    const oC=O(iC),cC=C(iC),hC=H(iC),lC=L(iC);
+    const bodyA=body(oA,cA), bodyB=body(oB,cB), bodyC=body(oC,cC);
+    const rangeA=rng(hA,lA), rangeB=rng(hB,lB), rangeC=rng(hC,lC);
+    const midA = (oA+cA)/2;
+
+    if(cA>oA && cB>oB && cC>oC && cB>cA && cC>cB && oB>oA && oB<cA && oC>oB && oC<cB){
+      P.push('three_white_soldiers');
+      // Advance Block: three soldiers pattern but weakening — shrinking bodies / growing upper wicks.
+      const uwB=upW(oB,hB,cB), uwC=upW(oC,hC,cC);
+      if(bodyC<bodyB && bodyB<=bodyA*1.05 && uwC>uwB) P.push('advance_block');
+      if(bodyC < bodyA*0.3 && bodyC/rangeC < 0.35) P.push('deliberation');
+    }
+    if(cA<oA && cB<oB && cC<oC && cB<cA && cC<cB && oB<oA && oB>cA && oC<oB && oC>cB){
+      P.push('three_black_crows');
+    }
+
+    if(cA<oA && bodyA/rangeA>0.5 && bodyB/rangeB<0.3 && cC>oC && cC>midA && bodyC/rangeC>0.5){
+      P.push('morning_star');
+      if(bodyB/rangeB < 0.1) P.push('morning_doji_star');
+      // Abandoned baby: like morning star, but the middle candle's whole range gaps clear of
+      // both neighbors (approximated — real gaps are rare on a continuously-traded market).
+      if(Math.max(hB,oB,cB) < lA && lC > Math.max(hB,oB,cB)){
+        P.push('bullish_abandoned_baby');
+      }
+    }
+    if(cA>oA && bodyA/rangeA>0.5 && bodyB/rangeB<0.3 && cC<oC && cC<midA && bodyC/rangeC>0.5){
+      P.push('evening_star');
+      if(bodyB/rangeB < 0.1) P.push('evening_doji_star');
+      if(Math.min(lB,oB,cB) > hA && Math.min(lB,oB,cB) > hC){
+        P.push('bearish_abandoned_baby');
+      }
+    }
+
+    // Tri-star: three consecutive doji, middle one offset from the other two
+    if(bodyA/rangeA<0.1 && bodyB/rangeB<0.1 && bodyC/rangeC<0.1){
+      if((cB>Math.max(cA,oA) && cB>Math.max(cC,oC)) || (cB<Math.min(cA,oA) && cB<Math.min(cC,oC))){
+        P.push('tri_star');
+      }
+    }
+
+    // Three Inside Up/Down: harami (A,B) confirmed by C closing beyond A's open/close range
+    if(bear(oA,cA) && bull(oB,cB) && oB>cA && cB<oA && bodyB<bodyA && cC>oA) P.push('three_inside_up');
+    if(bull(oA,cA) && bear(oB,cB) && oB<cA && cB>oA && bodyB<bodyA && cC<oA) P.push('three_inside_down');
+
+    // Three Outside Up/Down: engulfing (A,B) confirmed by C continuing further
+    if(bear(oA,cA) && bull(oB,cB) && oB<=cA && cB>=oA && cC>cB) P.push('three_outside_up');
+    if(bull(oA,cA) && bear(oB,cB) && oB>=cA && cB<=oA && cC<cB) P.push('three_outside_down');
+
+    // Stick sandwich: A bearish, B bullish, C bearish, with A and C closing at ~the same level
+    if(bear(oA,cA) && bull(oB,cB) && bear(oC,cC) && Math.abs(cA-cC) <= rangeA*0.05) P.push('stick_sandwich');
+
+    // Unique Three River Bottom: long bearish, then a smaller bearish candle making a lower low
+    // with a small body near its high (hammer-like), then a small bullish candle staying below B's close.
+    if(bear(oA,cA) && bodyA/rangeA>0.5 && bear(oB,cB) && lB<lA && bodyB<bodyA && (cB-lB)>2*bodyB
+       && bull(oC,cC) && cC<oB && bodyC<bodyB){
+      P.push('unique_three_river_bottom');
+    }
+
+    // Three Stars in the South: three bearish candles with shrinking range/lower shadows, each
+    // staying within the prior candle's range — a slow loss of downside momentum.
+    if(bear(oA,cA) && bear(oB,cB) && bear(oC,cC) && rangeB<rangeA && rangeC<rangeB
+       && lB>=lA && lC>=lB && bodyC<bodyB){
+      P.push('three_stars_in_the_south');
+    }
+
+    // Three-Line Strike: three same-direction candles then this candle engulfing all three
+    if(n>=4){
+      const iD=idx(3); const oD=O(iD),cD=C(iD);
+      if(bull(oD,cD)&&bull(oA,cA)&&bull(oB,cB)&&cA>cD&&cB>cA&&cC>cB && bear(oC,cC)===false && oC>cB && cC<oD){
+        // placeholder guard kept minimal; primary check below covers the real definition
+      }
+    }
+  }
+
+  // ---- 3-line strike (four candles: three in one direction, then a full engulf of all three) ----
+  if(n>=4){
+    const iA=idx(3), iB=idx(2), iC=idx(1), iD=idx(0);
+    const oA=O(iA),cA=C(iA), oB=O(iB),cB=C(iB), oC=O(iC),cC=C(iC), oD=O(iD),cD=C(iD);
+    if(bull(oA,cA)&&bull(oB,cB)&&bull(oC,cC)&&cB>cA&&cC>cB&&bear(oD,cD)&&oD>cC&&cD<oA) P.push('bullish_three_line_strike');
+    if(bear(oA,cA)&&bear(oB,cB)&&bear(oC,cC)&&cB<cA&&cC<cB&&bull(oD,cD)&&oD<cC&&cD>oA) P.push('bearish_three_line_strike');
+  }
+
+  // ---- Rising/Falling Three Methods (5 candles: long candle, 3 small opposite candles
+  // contained within its range, then a continuation candle) ----
+  if(n>=5){
+    const i0=idx(4), i1b=idx(3), i2b=idx(2), i3b=idx(1), i4=idx(0);
+    const o0=O(i0),c0=C(i0),h0=H(i0),l0=L(i0);
+    const body0 = body(o0,c0), range0 = rng(h0,l0);
+    const mids = [i1b,i2b,i3b].map(i => ({o:O(i),c:C(i),h:H(i),l:L(i)}));
+    const midsInsideRange = mids.every(m => m.h<=h0+range0*0.02 && m.l>=l0-range0*0.02);
+    const o4=O(i4), c4=C(i4);
+    if(bull(o0,c0) && body0/range0>0.5 && mids.every(m=>bear(m.o,m.c)) && midsInsideRange && bull(o4,c4) && c4>c0){
+      P.push('rising_three_methods');
+    }
+    if(bear(o0,c0) && body0/range0>0.5 && mids.every(m=>bull(m.o,m.c)) && midsInsideRange && bear(o4,c4) && c4<c0){
+      P.push('falling_three_methods');
+    }
+  }
+
+  return P;
 }
 
 const MTF_INTERVALS = ['15m', '1h', '4h'];
@@ -222,6 +405,79 @@ function findSupportResistance(highs, lows){
   };
 }
 
+// ---------------- Chart patterns: double top/bottom, head & shoulders, triangles/wedges ----------------
+function chartSlope(points){
+  if(points.length < 2) return 0;
+  const a = points[0], b = points[points.length-1];
+  const bars = b.idx - a.idx || 1;
+  return ((b.price - a.price) / a.price) / bars;
+}
+
+function detectChartPatterns(highs, lows, closes){
+  const patterns = [];
+  const { pivotHighs, pivotLows } = findPivots(highs, lows, 3);
+  const lastClose = closes[closes.length-1];
+
+  if(pivotHighs.length >= 2){
+    const [pA, pB] = pivotHighs.slice(-2);
+    if(Math.abs(pA.price - pB.price) / pA.price * 100 < 1.0){
+      const troughBetween = pivotLows.filter(p => p.idx > pA.idx && p.idx < pB.idx);
+      if(troughBetween.length){
+        const neckline = Math.min(...troughBetween.map(p=>p.price));
+        if((pA.price - neckline)/pA.price > 0.015){
+          patterns.push({ name: 'double_top', neckline: parseFloat(neckline.toFixed(2)), confirmed: lastClose < neckline });
+        }
+      }
+    }
+  }
+  if(pivotLows.length >= 2){
+    const [pA, pB] = pivotLows.slice(-2);
+    if(Math.abs(pA.price - pB.price) / pA.price * 100 < 1.0){
+      const peakBetween = pivotHighs.filter(p => p.idx > pA.idx && p.idx < pB.idx);
+      if(peakBetween.length){
+        const neckline = Math.max(...peakBetween.map(p=>p.price));
+        if((neckline - pA.price)/pA.price > 0.015){
+          patterns.push({ name: 'double_bottom', neckline: parseFloat(neckline.toFixed(2)), confirmed: lastClose > neckline });
+        }
+      }
+    }
+  }
+
+  if(pivotHighs.length >= 3){
+    const [L, H, R] = pivotHighs.slice(-3);
+    if(H.price > L.price && H.price > R.price && Math.abs(L.price - R.price) / L.price * 100 < 3){
+      const necklineLows = pivotLows.filter(p => p.idx > L.idx && p.idx < R.idx);
+      if(necklineLows.length >= 1){
+        const neckline = necklineLows.reduce((a,b)=>a+b.price,0)/necklineLows.length;
+        patterns.push({ name: 'head_and_shoulders', neckline: parseFloat(neckline.toFixed(2)), confirmed: lastClose < neckline });
+      }
+    }
+  }
+  if(pivotLows.length >= 3){
+    const [L, H, R] = pivotLows.slice(-3);
+    if(H.price < L.price && H.price < R.price && Math.abs(L.price - R.price) / L.price * 100 < 3){
+      const necklineHighs = pivotHighs.filter(p => p.idx > L.idx && p.idx < R.idx);
+      if(necklineHighs.length >= 1){
+        const neckline = necklineHighs.reduce((a,b)=>a+b.price,0)/necklineHighs.length;
+        patterns.push({ name: 'inverse_head_and_shoulders', neckline: parseFloat(neckline.toFixed(2)), confirmed: lastClose > neckline });
+      }
+    }
+  }
+
+  if(pivotHighs.length >= 2 && pivotLows.length >= 2){
+    const highSlope = chartSlope(pivotHighs.slice(-4));
+    const lowSlope = chartSlope(pivotLows.slice(-4));
+    const flat = 0.0005;
+    if(Math.abs(highSlope) < flat && lowSlope > flat) patterns.push({ name: 'ascending_triangle' });
+    else if(Math.abs(lowSlope) < flat && highSlope < -flat) patterns.push({ name: 'descending_triangle' });
+    else if(highSlope > flat && lowSlope > flat && highSlope < lowSlope) patterns.push({ name: 'rising_wedge' });
+    else if(highSlope < -flat && lowSlope < -flat && highSlope < lowSlope) patterns.push({ name: 'falling_wedge' });
+    else if(highSlope < -flat && lowSlope > flat) patterns.push({ name: 'symmetrical_triangle' });
+  }
+
+  return patterns;
+}
+
 // ---------------- Per-timeframe technicals ----------------
 async function loadTimeframeTechnicals(coin, interval){
   try{
@@ -243,13 +499,14 @@ async function loadTimeframeTechnicals(coin, interval){
     const bbUpper = (sma20!=null && bbSd!=null) ? sma20 + 2*bbSd : null;
     const bbLower = (sma20!=null && bbSd!=null) ? sma20 - 2*bbSd : null;
     const patterns = detectPatterns(opens, highs, lows, closes);
+    const chartPatterns = detectChartPatterns(highs, lows, closes);
     const { resistanceLevels, supportLevels } = findSupportResistance(highs, lows);
 
     return {
       interval, lastClose: closes[closes.length-1], rsi14, sma20, sma50,
       macd, macdSignal: signal, macdHist: hist,
       bbUpper, bbMid: sma20, bbLower, volSma20: sma(vols,20), lastVol: vols[vols.length-1],
-      patterns, swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50)),
+      patterns, chartPatterns, swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50)),
       resistanceLevels, supportLevels
     };
   }catch(e){ console.error('Technicals failed for ' + coin + ' (' + interval + '):', e.message); return null; }
@@ -290,11 +547,15 @@ function formatMultiTimeframeBlock(coin, mtf, alignment){
     if(!t) return '  ' + iv + ': data unavailable';
     const res = t.resistanceLevels.length ? t.resistanceLevels.map(l => '$'+l.price.toFixed(2)+' ('+l.tests+'x tested)').join(', ') : 'none found';
     const sup = t.supportLevels.length ? t.supportLevels.map(l => '$'+l.price.toFixed(2)+' ('+l.tests+'x tested)').join(', ') : 'none found';
+    const chartPatternStr = (t.chartPatterns && t.chartPatterns.length)
+      ? t.chartPatterns.map(cp => cp.name + (cp.neckline ? ` (neckline $${cp.neckline}${cp.confirmed ? ', confirmed' : ', not yet confirmed'})` : '')).join(', ')
+      : 'none';
     return '  ' + iv + ': price $'+fmt(t.lastClose,2)+', RSI14 '+fmt(t.rsi14,1)
       + ', SMA20 $'+fmt(t.sma20,2)+'/SMA50 $'+fmt(t.sma50,2)
       + ', MACD hist '+fmt(t.macdHist,4)
       + ', Bollinger $'+fmt(t.bbLower,2)+'-$'+fmt(t.bbUpper,2)
-      + ', patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none')
+      + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none')
+      + ', chart patterns: '+chartPatternStr
       + ', resistance: '+res+', support: '+sup;
   }).join('\n');
   const alignLine = alignment.direction
@@ -352,6 +613,7 @@ function buildAgentPrompt(signals, mtfData, alignments){
   const rows = Object.values(signals);
   const supportTable = rows.map(r =>
     r.coin+': funding '+(r.funding*100).toFixed(4)+'%/8h, OI '+Math.round(r.openInterest)+', '
+    + 'OI momentum: '+(r.oiMomentum || 'insufficient history')+', '
     + 'order-book imbalance '+(r.imbalance*100).toFixed(1)+'% ('+(r.imbalance>0?'bid-heavy':'ask-heavy')+'), '
     + 'spread '+(r.spreadPct!=null? r.spreadPct.toFixed(3)+'%':'n/a')+', '
     + '5m volume vs trailing avg '+r.volRatio.toFixed(2)+'x'
@@ -360,35 +622,92 @@ function buildAgentPrompt(signals, mtfData, alignments){
   const system = "You are JARVIS's trading research sub-agent for a Hyperliquid perpetuals account, acting as a master chart technician. "
     + "Every coin below has ALREADY been confirmed to have multi-timeframe alignment (agreement across 15m/1h/4h) before reaching you — respect that "
     + "established direction; don't recommend the opposite direction from what's aligned unless the evidence is overwhelming and you say so explicitly. "
-    + "Your PRIMARY basis for every recommendation must be technical analysis: candlestick chart patterns, confirmed by volume, agreement from popular "
-    + "indicators (RSI, MACD, Bollinger Bands, moving averages) across timeframes, and support/resistance levels — including how many times each level "
-    + "has been tested (more tests generally means a more significant level). Only recommend a trade when the technical picture is genuinely compelling. "
-    + "After forming your technical view, do ONE quick supplementary web search per candidate for sentiment and social buzz (X/Twitter, Reddit, "
-    + "crypto forums) and recent news — use this only to confirm or flag a conflict with the technical picture, never as the primary reason for a trade. "
+    + "Your ENTIRE basis for every recommendation is technical and market-structure analysis: candlestick patterns (both single-candle and multi-candle "
+    + "structures like three soldiers/crows, morning/evening stars, three-line strikes), classic chart patterns (double tops/bottoms, head and shoulders, "
+    + "triangles, wedges — noting whether a pattern's neckline has actually been confirmed or is still forming), agreement from popular indicators (RSI, MACD, "
+    + "Bollinger Bands, moving averages) across timeframes, support/resistance levels with their test counts, order-book imbalance, and open-interest momentum "
+    + "(rising OI + rising price is a fresh long buildup and a stronger signal than the same price move on falling OI, which is likely just short-covering — "
+    + "weight OI momentum accordingly). You have no access to news or social sentiment and should not reference or assume any. "
     + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
-    + "You NEVER place trades yourself; you only propose them for human review. "
+    + "You NEVER place trades yourself; you only propose them for human (or pre-authorized automatic) review. "
     + "Return at most 3 ideas — only ones with genuine technical conviction; return fewer or none if nothing qualifies. "
     + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond a tested support/resistance level or recent swing), "
     + "and ideally within about " + MAX_STOP_LOSS_PCT + "% of entry — trades needing a wider stop than that to make sense are usually not a fit here. "
-    + "Be concise: rationale <= 35 words, sentiment_note <= 20 words. "
+    + "For each idea, list which of these confluence factors are genuinely present (be honest — don't pad the list): candlestick_pattern, chart_pattern, "
+    + "macd_agreement, rsi_agreement, bollinger_band_position, support_resistance_confluence, oi_momentum. Do not set your own conviction label — it will be "
+    + "computed from the number of factors you honestly report. Also — before finalizing each idea — argue against it: state the single strongest reason this "
+    + "trade could fail (counterthesis), and briefly say why you're proposing it anyway despite that risk (counterthesis_response). If you can't come up with "
+    + "a credible reason it could fail, or can't credibly answer your own counterthesis, drop the idea rather than force it. "
+    + "Be concise: rationale <= 35 words, counterthesis <= 25 words, counterthesis_response <= 25 words. "
     + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
-    + '{"recommendations":[{"coin":string,"direction":"long"|"short","conviction":"low"|"medium"|"high",'
-    + '"pattern":string,"indicators_confirming":[string],"sentiment_note":string,"rationale":string,"time_horizon":string,'
+    + '{"recommendations":[{"coin":string,"direction":"long"|"short",'
+    + '"pattern":string,"indicators_confirming":[string],"confluence_factors":[string],'
+    + '"rationale":string,"counterthesis":string,"counterthesis_response":string,"time_horizon":string,'
     + '"entry_price":number,"stop_loss_price":number,"take_profit_price":number|null,'
     + '"suggested_size_pct_equity":number,"suggested_leverage":number,"risk_flags":[string]}]}';
 
   const user = "Multi-timeframe technical readout, including support/resistance levels and how many times each has been tested (primary evidence):\n\n" + techTable
-    + "\n\nSupporting market data (funding/OI/book/volume):\n" + supportTable
+    + "\n\nSupporting market data (funding/OI momentum/book/volume):\n" + supportTable
     + "\n\nFind the best technically-confirmed, quick-turnaround opportunities right now among these coins (or state none if the technical picture isn't compelling for any of them).";
   return { system, user };
 }
 
+// ---------------- Confluence-based conviction (computed in code, not left to the model's own label) ----------------
+const ALL_CONFLUENCE_FACTORS = ['candlestick_pattern','chart_pattern','macd_agreement','rsi_agreement','bollinger_band_position','support_resistance_confluence','oi_momentum'];
+
+function computeConviction(rec){
+  const factors = (rec.confluence_factors || []).filter(f => ALL_CONFLUENCE_FACTORS.includes(f));
+  rec.confluence_factors = factors; // drop anything the model invented outside the known list
+  rec.confluence_score = factors.length;
+  if(factors.length >= 5) return 'high';
+  if(factors.length >= 3) return 'medium';
+  return 'low';
+}
+
+// ---------------- Open interest momentum (tracked across runs via state.json) ----------------
+function classifyOiMomentum(oiChangePct, priceChangePct){
+  if(oiChangePct == null || priceChangePct == null) return null;
+  if(oiChangePct > 1 && priceChangePct > 0) return `OI +${oiChangePct.toFixed(1)}% & price up (fresh long buildup)`;
+  if(oiChangePct > 1 && priceChangePct < 0) return `OI +${oiChangePct.toFixed(1)}% & price down (fresh short buildup)`;
+  if(oiChangePct < -1 && priceChangePct > 0) return `OI ${oiChangePct.toFixed(1)}% & price up (short covering, weaker signal)`;
+  if(oiChangePct < -1 && priceChangePct < 0) return `OI ${oiChangePct.toFixed(1)}% & price down (long unwind, weaker signal)`;
+  return `OI roughly flat (${oiChangePct.toFixed(1)}%)`;
+}
+
+function applyOiMomentum(signals, state){
+  state.lastOiByCoin = state.lastOiByCoin || {};
+  state.lastPriceByCoin = state.lastPriceByCoin || {};
+  Object.values(signals).forEach(s => {
+    const prevOi = state.lastOiByCoin[s.coin];
+    const prevPrice = state.lastPriceByCoin[s.coin];
+    const oiChangePct = (prevOi != null && prevOi > 0) ? ((s.openInterest - prevOi) / prevOi * 100) : null;
+    const priceChangePct = (prevPrice != null && prevPrice > 0) ? ((s.markPx - prevPrice) / prevPrice * 100) : null;
+    s.oiMomentum = classifyOiMomentum(oiChangePct, priceChangePct);
+    state.lastOiByCoin[s.coin] = s.openInterest;
+    state.lastPriceByCoin[s.coin] = s.markPx;
+  });
+}
+
 // ---------------- Risk-level resolution (AI value -> technical calc -> settings fallback) ----------------
-function resolveRiskLevels(rec, technicals, maxStopLossPct, defaultTakeProfitPct){
+function resolveRiskLevels(rec, technicals, maxStopLossPct, defaultTakeProfitPct, maxTakeProfitPct, maxEntryDeviationPct){
   const isLong = rec.direction !== 'short';
-  const entry = rec.entry_price;
   const t = technicals;
   const notes = [];
+
+  // --- Entry price: the AI sets this from its own analysis, but it must not stray far from the
+  // live market price — a stale or unrealistic entry undermines everything computed from it below.
+  let entry = rec.entry_price;
+  if(t && t.lastClose != null && entry && isFinite(entry) && entry > 0){
+    const entryDevPct = Math.abs(entry - t.lastClose) / t.lastClose * 100;
+    if(entryDevPct > maxEntryDeviationPct){
+      notes.push(`entry: AI-suggested $${entry.toFixed(2)} was ${entryDevPct.toFixed(1)}% from live price, replaced with live price`);
+      entry = t.lastClose;
+    }
+  } else if(t && t.lastClose != null && (!entry || !isFinite(entry) || entry <= 0)){
+    entry = t.lastClose;
+    notes.push('entry: no valid AI value, used live price');
+  }
+  rec.entry_price = entry;
 
   // --- Stop-loss ---
   let stop = rec.stop_loss_price;
@@ -434,6 +753,14 @@ function resolveRiskLevels(rec, technicals, maxStopLossPct, defaultTakeProfitPct
     }
   }
 
+  // Cap the final take-profit distance regardless of where it came from — an AI target (or a
+  // technically-derived one) can still be unrealistically far away.
+  const tpDistPct = Math.abs(tp - entry) / entry * 100;
+  if(tpDistPct > maxTakeProfitPct){
+    tp = isLong ? entry * (1 + maxTakeProfitPct/100) : entry * (1 - maxTakeProfitPct/100);
+    notes.push(`target: capped at max take-profit distance setting (was ${tpDistPct.toFixed(1)}% away)`);
+  }
+
   rec.stop_loss_price = parseFloat(stop.toFixed(2));
   rec.take_profit_price = parseFloat(tp.toFixed(2));
   rec.risk_flags = (rec.risk_flags || []).concat(notes.filter(n => !n.includes('AI-suggested')));
@@ -443,8 +770,22 @@ function resolveRiskLevels(rec, technicals, maxStopLossPct, defaultTakeProfitPct
 // ---------------- Technicals-only fallback (used when Anthropic is unavailable, e.g. low credits) ----------------
 function technicalOnlySignal(t){
   if(!t) return null;
-  const bullPatterns = ['bullish_engulfing','hammer'];
-  const bearPatterns = ['bearish_engulfing','shooting_star'];
+  const bullPatterns = [
+    'bullish_engulfing','hammer','inverted_hammer','bullish_belt_hold','dragonfly_doji',
+    'piercing_line','bullish_kicking','three_white_soldiers','morning_star','morning_doji_star',
+    'bullish_abandoned_baby','three_inside_up','three_outside_up','bullish_harami','bullish_harami_cross',
+    'bullish_meeting_lines','bullish_separating_lines','bullish_side_by_side_white_lines',
+    'stick_sandwich','unique_three_river_bottom','three_stars_in_the_south',
+    'bullish_three_line_strike','rising_three_methods'
+  ];
+  const bearPatterns = [
+    'bearish_engulfing','hanging_man','shooting_star','bearish_belt_hold','gravestone_doji',
+    'dark_cloud_cover','bearish_kicking','three_black_crows','evening_star','evening_doji_star',
+    'bearish_abandoned_baby','three_inside_down','three_outside_down','bearish_harami','bearish_harami_cross',
+    'bearish_meeting_lines','bearish_separating_lines','bearish_side_by_side_black_lines',
+    'on_neck','in_neck','thrusting','advance_block','deliberation',
+    'bearish_three_line_strike','falling_three_methods'
+  ];
   const hasBull = t.patterns.some(p => bullPatterns.includes(p));
   const hasBear = t.patterns.some(p => bearPatterns.includes(p));
   const macdBull = t.macdHist != null && t.macdHist > 0;
@@ -453,9 +794,11 @@ function technicalOnlySignal(t){
   const nearUpperBand = t.bbUpper != null && t.lastClose >= t.bbUpper * 0.99;
   const rsiOversold = t.rsi14 != null && t.rsi14 < 35;
   const rsiOverbought = t.rsi14 != null && t.rsi14 > 65;
+  const chartBull = (t.chartPatterns||[]).some(cp => ['double_bottom','inverse_head_and_shoulders','ascending_triangle','falling_wedge'].includes(cp.name));
+  const chartBear = (t.chartPatterns||[]).some(cp => ['double_top','head_and_shoulders','descending_triangle','rising_wedge'].includes(cp.name));
 
-  const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold'].filter(Boolean);
-  const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought'].filter(Boolean);
+  const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold', chartBull && 'bullish chart pattern'].filter(Boolean);
+  const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought', chartBear && 'bearish chart pattern'].filter(Boolean);
 
   if(bullFactors.length >= 2 && bullFactors.length > bearFactors.length){
     return { direction: 'long', confirming: bullFactors, pattern: t.patterns.filter(p=>bullPatterns.includes(p)).join(', ') || 'momentum confluence (no single candle pattern)' };
@@ -475,16 +818,16 @@ function buildFallbackRecommendations(scanCoins, technicals, maxPositionPct, max
     let rec = {
       coin, direction: signal.direction, conviction: 'low',
       pattern: signal.pattern, indicators_confirming: signal.confirming,
-      sentiment_note: 'Not available — Anthropic was unreachable (likely low credits), so this idea is technicals-only with no sentiment/news check.',
-      rationale: 'Technical confluence only: ' + signal.confirming.join(', ') + '. No AI research performed.',
+      confluence_factors: [], confluence_score: signal.confirming.length,
+      rationale: 'Technical confluence only: ' + signal.confirming.join(', ') + '. No AI research performed this cycle.',
       time_horizon: 'Short-term (technical fallback)',
       entry_price: t.lastClose,
       stop_loss_price: null, take_profit_price: null,
       suggested_size_pct_equity: Math.max(1, Math.round((maxPositionPct/2) * 10) / 10),
       suggested_leverage: 1,
-      risk_flags: ['technicals-only fallback — no sentiment/news confirmation']
+      risk_flags: ['technicals-only fallback — no AI research this cycle']
     };
-    rec = resolveRiskLevels(rec, t, maxStopLossPct, defaultTakeProfitPct);
+    rec = resolveRiskLevels(rec, t, maxStopLossPct, defaultTakeProfitPct, MAX_TAKE_PROFIT_PCT, MAX_ENTRY_DEVIATION_PCT);
     recs.push(rec);
   }
   return recs.slice(0, 3);
@@ -500,10 +843,10 @@ async function callAnthropic(system, user){
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
+      max_tokens: 2000,
       system,
-      messages: [{ role: 'user', content: user }],
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }]
+      messages: [{ role: 'user', content: user }]
+      // No tools: no web search, no sentiment/news — technicals and market structure only.
     })
   });
   const data = await res.json();
@@ -511,6 +854,50 @@ async function callAnthropic(system, user){
   const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
   let raw = textBlocks.join('\n').trim().replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim();
   return JSON.parse(raw);
+}
+
+// ---------------- Self-consistency: two independent passes, only keep what both agree on ----------------
+function tighterStop(direction, stopA, stopB){
+  if(stopA == null) return stopB;
+  if(stopB == null) return stopA;
+  // "Tighter" = closer to entry = more conservative (smaller potential loss).
+  return direction === 'short' ? Math.min(stopA, stopB) : Math.max(stopA, stopB);
+}
+
+function mergeConsistentRecs(recsA, recsB){
+  const merged = [];
+  for(const a of recsA){
+    const b = recsB.find(x => x.coin === a.coin && x.direction === a.direction);
+    if(!b) continue; // didn't reproduce on the independent pass — drop it
+    merged.push({
+      coin: a.coin,
+      direction: a.direction,
+      pattern: a.pattern,
+      indicators_confirming: Array.from(new Set([...(a.indicators_confirming||[]), ...(b.indicators_confirming||[])])),
+      confluence_factors: Array.from(new Set([...(a.confluence_factors||[]), ...(b.confluence_factors||[])])),
+      rationale: a.rationale,
+      counterthesis: a.counterthesis,
+      counterthesis_response: a.counterthesis_response,
+      time_horizon: a.time_horizon,
+      entry_price: (a.entry_price + b.entry_price) / 2,
+      stop_loss_price: tighterStop(a.direction, a.stop_loss_price, b.stop_loss_price),
+      take_profit_price: (a.take_profit_price && b.take_profit_price) ? (a.take_profit_price + b.take_profit_price) / 2 : (a.take_profit_price || b.take_profit_price || null),
+      suggested_size_pct_equity: Math.min(a.suggested_size_pct_equity || 5, b.suggested_size_pct_equity || 5),
+      suggested_leverage: Math.min(a.suggested_leverage || 1, b.suggested_leverage || 1),
+      risk_flags: Array.from(new Set([...(a.risk_flags||[]), ...(b.risk_flags||[])])),
+      self_consistent: true
+    });
+  }
+  return merged;
+}
+
+async function callAnthropicWithSelfConsistency(system, user){
+  const [resA, resB] = await Promise.all([ callAnthropic(system, user), callAnthropic(system, user) ]);
+  const recsA = resA.recommendations || [];
+  const recsB = resB.recommendations || [];
+  const merged = mergeConsistentRecs(recsA, recsB);
+  console.log(`Self-consistency: pass A found ${recsA.length}, pass B found ${recsB.length}, ${merged.length} agreed on both coin+direction.`);
+  return { recommendations: merged };
 }
 
 async function sendTelegram(text, replyMarkup, attempt){
@@ -547,18 +934,42 @@ async function sendTelegram(text, replyMarkup, attempt){
 
 function formatTelegramMessage(rec){
   const dir = rec.direction === 'short' ? 'SHORT' : 'LONG';
-  const flags = (rec.risk_flags || []).length ? '\n⚠ ' + rec.risk_flags.join(', ') : '';
   const confirming = (rec.indicators_confirming || []).length ? rec.indicators_confirming.join(', ') : '—';
-  const fallbackNote = rec.source === 'backend-fallback' ? '\n🔧 Technicals-only mode — Anthropic was unavailable, no sentiment/news check was done.' : '';
-  return `🤖 JARVIS Trade Agent — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction)${fallbackNote}\n`
-    + `Pattern: ${rec.pattern || '—'}\n`
-    + `Confirming: ${confirming}\n`
-    + `Why: ${rec.rationale || '—'}\n`
-    + (rec.sentiment_note ? `Sentiment check: ${rec.sentiment_note}\n` : '')
-    + `Horizon: ${rec.time_horizon || '—'}\n`
-    + `Entry ~$${rec.entry_price} · Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : '') + `\n`
-    + `Sized at ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (capped by your configured limits at execution)${flags}\n`
-    + `Expires in ${EXECUTION_WINDOW_MIN} min. Not financial advice — tap below to confirm or deny.`;
+  const fallbackNote = rec.source === 'backend-fallback' ? '\n🔧 Technicals-only this cycle (AI unavailable or off).' : '';
+  const consistencyNote = rec.self_consistent ? ' · verified on independent re-check' : '';
+
+  const lines = [];
+  lines.push(`🤖 JARVIS Trade Agent — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction, ${rec.confluence_score != null ? rec.confluence_score + '/7 factors' : 'n/a'}${consistencyNote})${fallbackNote}`);
+  lines.push('');
+  lines.push(`• Pattern: ${rec.pattern || '—'}`);
+  lines.push(`• Confirming: ${confirming}`);
+  if((rec.confluence_factors || []).length) lines.push(`• Confluence: ${rec.confluence_factors.join(', ')}`);
+  lines.push(`• Why: ${rec.rationale || '—'}`);
+  if(rec.counterthesis) lines.push(`• Risk to this idea: ${rec.counterthesis}`);
+  if(rec.counterthesis_response) lines.push(`• Still valid because: ${rec.counterthesis_response}`);
+  lines.push(`• Horizon: ${rec.time_horizon || '—'}`);
+  lines.push(`• Entry ~$${rec.entry_price} · Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : ''));
+
+  if((rec.resistance_levels || []).length){
+    lines.push('• Resistance: ' + rec.resistance_levels.map(l => `$${l.price} (${l.tests}x touched)`).join(', '));
+  }
+  if((rec.support_levels || []).length){
+    lines.push('• Support: ' + rec.support_levels.map(l => `$${l.price} (${l.tests}x touched)`).join(', '));
+  }
+  if((rec.chart_patterns || []).length){
+    lines.push('• Chart pattern: ' + rec.chart_patterns.map(cp => cp.name + (cp.neckline ? ` (neckline $${cp.neckline}${cp.confirmed ? ', confirmed' : ''})` : '')).join(', '));
+  }
+
+  lines.push(`• Size: ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (capped by your limits at execution)`);
+  if((rec.risk_flags || []).length) lines.push(`• Flags: ${rec.risk_flags.join(', ')}`);
+  lines.push('');
+  if(rec.auto_trade){
+    lines.push(`⚡ Auto-trade is ON — this executes automatically in a few minutes unless you tap Cancel below.`);
+  } else {
+    lines.push(`Expires in ${EXECUTION_WINDOW_MIN} min — tap below to confirm or deny.`);
+  }
+
+  return lines.join('\n');
 }
 
 async function main(){
@@ -570,12 +981,16 @@ async function main(){
     if(shared.filteredMinOI) FILTERED_MIN_OI = parseFloat(shared.filteredMinOI);
     if(shared.filteredMinVolume24h) FILTERED_MIN_VOLUME_24H = parseFloat(shared.filteredMinVolume24h);
     if(shared.maxStopLossPct) MAX_STOP_LOSS_PCT = parseFloat(shared.maxStopLossPct);
+    if(shared.maxTakeProfitPct) MAX_TAKE_PROFIT_PCT = parseFloat(shared.maxTakeProfitPct);
+    if(shared.maxEntryDeviationPct) MAX_ENTRY_DEVIATION_PCT = parseFloat(shared.maxEntryDeviationPct);
     if(shared.maxPositionPct) MAX_POSITION_PCT = parseFloat(shared.maxPositionPct);
     if(shared.maxLeverage) MAX_LEVERAGE = parseFloat(shared.maxLeverage);
     if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
     if(shared.aiResearchEnabled !== undefined) AI_RESEARCH_ENABLED = !!shared.aiResearchEnabled;
+    if(shared.autoTradeEnabled !== undefined) AUTO_TRADE_ENABLED = !!shared.autoTradeEnabled;
   }
   console.log('AI research is ' + (AI_RESEARCH_ENABLED ? 'ENABLED' : 'DISABLED') + ' this run.');
+  console.log('Auto-trade is ' + (AUTO_TRADE_ENABLED ? 'ENABLED — confirmed ideas will execute without a tap' : 'disabled — every idea needs your confirm/deny') + '.');
 
   const allCoins = await resolveCoins();
   if(!allCoins.length){ console.log('No coins resolved (empty watchlist, or filtered-universe thresholds too strict), exiting.'); return; }
@@ -587,6 +1002,7 @@ async function main(){
   // is gated by any cooldown until the point where Anthropic itself might get called.
   console.log(`Checking signals (${SCAN_MODE} mode) for: ` + allCoins.join(', '));
   const signals = await loadSignals(allCoins);
+  applyOiMomentum(signals, state);
   const tripped = findTrippedCoins(signals);
 
   if(!tripped.length){
@@ -649,23 +1065,37 @@ async function main(){
     usedFallback = true;
   } else {
     const { system, user } = buildAgentPrompt(subsetSignals, subsetMtf, subsetAlignments);
-    console.log('Calling Anthropic for research on: ' + scanCoins.join(', '));
+    console.log('Calling Anthropic (2x, self-consistency check) for research on: ' + scanCoins.join(', '));
     try{
-      const parsed = await callAnthropic(system, user);
+      const parsed = await callAnthropicWithSelfConsistency(system, user);
       newRecs = parsed.recommendations || [];
     }catch(e){
       console.error('Anthropic call failed: ' + e.message);
-      console.log('Continuing with technicals-only fallback (no sentiment/news check this run).');
+      console.log('Continuing with technicals-only fallback.');
       newRecs = buildFallbackRecommendations(scanCoins, technicals, MAX_POSITION_PCT, MAX_LEVERAGE, MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT);
       usedFallback = true;
     }
     state.lastAiCallTime = Date.now(); // resets the cooldown whether the call succeeded or failed
   }
-  console.log('Got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only)' : ' (AI-researched)') + '.');
+  console.log('Got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only)' : ' (AI-researched, self-consistent)') + '.');
 
   if(!usedFallback){
-    newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT));
+    newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT, MAX_TAKE_PROFIT_PCT, MAX_ENTRY_DEVIATION_PCT));
+    newRecs.forEach(rec => { rec.conviction = computeConviction(rec); });
+  } else {
+    newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; });
   }
+
+  // Attach the 15m support/resistance and chart-pattern readout to each rec so it can be
+  // relayed downstream (Telegram, dashboard) without needing to recompute it.
+  newRecs.forEach(rec => {
+    const t = technicals[rec.coin];
+    if(t){
+      rec.resistance_levels = (t.resistanceLevels || []).map(l => ({ price: parseFloat(l.price.toFixed(2)), tests: l.tests }));
+      rec.support_levels = (t.supportLevels || []).map(l => ({ price: parseFloat(l.price.toFixed(2)), tests: l.tests }));
+      rec.chart_patterns = t.chartPatterns || [];
+    }
+  });
 
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + EXECUTION_WINDOW_MIN * 60000).toISOString();
@@ -675,12 +1105,13 @@ async function main(){
     rec.expires_at = expiresAt;
     rec.source = usedFallback ? 'backend-fallback' : 'backend';
     rec.status = 'pending';
-    const replyMarkup = {
-      inline_keyboard: [[
-        { text: '✅ Confirm', callback_data: 'confirm:' + rec.id },
-        { text: '❌ Deny', callback_data: 'deny:' + rec.id }
-      ]]
-    };
+    rec.auto_trade = AUTO_TRADE_ENABLED;
+    const replyMarkup = AUTO_TRADE_ENABLED
+      ? { inline_keyboard: [[ { text: '❌ Cancel', callback_data: 'deny:' + rec.id } ]] }
+      : { inline_keyboard: [[
+          { text: '✅ Confirm', callback_data: 'confirm:' + rec.id },
+          { text: '❌ Deny', callback_data: 'deny:' + rec.id }
+        ]] };
     const messageId = await sendTelegram(formatTelegramMessage(rec), replyMarkup);
     if(messageId){
       rec.telegram_message_id = messageId;

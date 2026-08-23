@@ -24,8 +24,9 @@ let MAX_POSITION_PCT = MAX_POSITION_PCT_DEFAULT;
 let MAX_LEVERAGE = MAX_LEVERAGE_DEFAULT;
 let DEFAULT_TAKE_PROFIT_PCT = DEFAULT_TAKE_PROFIT_PCT_DEFAULT;
 let MAX_STOP_LOSS_PCT = MAX_STOP_LOSS_PCT_DEFAULT;
+let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
+let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
-const MAX_PRICE_DRIFT_PCT = 2.5; // abort if price moved more than this since the recommendation was made
 
 const INFO_URL = HL_EXEC_NETWORK === 'mainnet' ? 'https://api.hyperliquid.xyz/info' : 'https://api.hyperliquid-testnet.xyz/info';
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
@@ -43,7 +44,9 @@ function loadSharedConfig(){
   if(shared.maxLeverage) MAX_LEVERAGE = parseFloat(shared.maxLeverage);
   if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
   if(shared.maxStopLossPct) MAX_STOP_LOSS_PCT = parseFloat(shared.maxStopLossPct);
-  console.log(`Using dashboard-published risk config: max ${MAX_POSITION_PCT}% equity, ${MAX_LEVERAGE}x leverage, ${DEFAULT_TAKE_PROFIT_PCT}% default TP, ${MAX_STOP_LOSS_PCT}% max stop distance (updated ${shared.updated_at || 'unknown'})`);
+  if(shared.maxTakeProfitPct) MAX_TAKE_PROFIT_PCT = parseFloat(shared.maxTakeProfitPct);
+  if(shared.maxEntryDeviationPct) MAX_ENTRY_DEVIATION_PCT = parseFloat(shared.maxEntryDeviationPct);
+  console.log(`Using dashboard-published risk config: max ${MAX_POSITION_PCT}% equity, ${MAX_LEVERAGE}x leverage, ${DEFAULT_TAKE_PROFIT_PCT}% default TP, ${MAX_STOP_LOSS_PCT}% max stop distance, ${MAX_TAKE_PROFIT_PCT}% max TP distance, ${MAX_ENTRY_DEVIATION_PCT}% max entry deviation (updated ${shared.updated_at || 'unknown'})`);
 }
 
 async function tg(method, body, attempt){
@@ -98,11 +101,11 @@ async function getAccountEquity(){
 }
 
 async function getAccountSnapshot(){
-  if(!HL_ACCOUNT_ADDRESS) return 'Account address not configured.';
+  if(!HL_ACCOUNT_ADDRESS) return '• Account address not configured.';
   const addrShort = HL_ACCOUNT_ADDRESS.length > 12
     ? HL_ACCOUNT_ADDRESS.slice(0,6) + '…' + HL_ACCOUNT_ADDRESS.slice(-4)
     : HL_ACCOUNT_ADDRESS;
-  const queried = `(queried ${HL_EXEC_NETWORK}: ${addrShort})`;
+  const queried = `${HL_EXEC_NETWORK}: ${addrShort}`;
   try{
     const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
     const ms = state.marginSummary || {};
@@ -110,16 +113,19 @@ async function getAccountSnapshot(){
     const accountValue = parseFloat(ms.accountValue);
     const marginUsed = parseFloat(ms.totalMarginUsed);
     const withdrawable = parseFloat(state.withdrawable);
-    let line = `Account value $${isFinite(accountValue)?accountValue.toFixed(2):'n/a'}, `
-      + `margin used $${isFinite(marginUsed)?marginUsed.toFixed(2):'n/a'}, `
-      + `investable balance $${isFinite(withdrawable)?withdrawable.toFixed(2):'n/a'} (uncommitted funds available for new trades), `
-      + `${openPositions} open position(s) ${queried}`;
+    let lines = [
+      `• Account value: $${isFinite(accountValue)?accountValue.toFixed(2):'n/a'}`,
+      `• Margin used: $${isFinite(marginUsed)?marginUsed.toFixed(2):'n/a'}`,
+      `• Investable balance: $${isFinite(withdrawable)?withdrawable.toFixed(2):'n/a'}`,
+      `• Open positions: ${openPositions}`,
+      `• Queried: ${queried}`
+    ];
     if(!accountValue){
-      line += `\nIf this looks wrong: check that HL_EXEC_NETWORK in GitHub Variables matches the network your funds are actually on, and that HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.`;
+      lines.push('• If this looks wrong: check HL_EXEC_NETWORK matches your funds\' network, and HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.');
     }
-    return line;
+    return lines.join('\n');
   }catch(e){
-    return 'Could not fetch account stats: ' + e.message + ' ' + queried;
+    return `• Could not fetch account stats: ${e.message}\n• Queried: ${queried}`;
   }
 }
 
@@ -127,17 +133,17 @@ function describeOrderResult(result, labels){
   try{
     const statuses = result && result.response && result.response.data && result.response.data.statuses;
     if(!Array.isArray(statuses)){
-      return ['Order response format not recognized — raw: ' + JSON.stringify(result).slice(0,200)];
+      return ['• Order response format not recognized — raw: ' + JSON.stringify(result).slice(0,200)];
     }
     return statuses.map((s, i) => {
       const label = labels[i] || ('Order ' + (i+1));
-      if(s.error) return label + ': ERROR — ' + s.error;
-      if(s.filled) return label + ': FILLED ' + s.filled.totalSz + ' @ $' + s.filled.avgPx;
-      if(s.resting) return label + ': resting (order id ' + s.resting.oid + ')';
-      return label + ': ' + JSON.stringify(s);
+      if(s.error) return `• ${label}: ERROR — ${s.error}`;
+      if(s.filled) return `• ${label}: FILLED ${s.filled.totalSz} @ $${s.filled.avgPx}`;
+      if(s.resting) return `• ${label}: resting (order id ${s.resting.oid})`;
+      return `• ${label}: ${JSON.stringify(s)}`;
     });
   }catch(e){
-    return ['Could not parse order result: ' + e.message];
+    return ['• Could not parse order result: ' + e.message];
   }
 }
 
@@ -150,8 +156,8 @@ async function executeTrade(rec){
   if(!currentMid) throw new Error('No live price available for ' + rec.coin);
 
   const driftPct = Math.abs(currentMid - rec.entry_price) / rec.entry_price * 100;
-  if(driftPct > MAX_PRICE_DRIFT_PCT){
-    throw new Error(`Price moved ${driftPct.toFixed(2)}% since the recommendation (>${MAX_PRICE_DRIFT_PCT}% limit) — skipped for safety`);
+  if(driftPct > MAX_ENTRY_DEVIATION_PCT){
+    throw new Error(`Price moved ${driftPct.toFixed(2)}% since the recommendation (>${MAX_ENTRY_DEVIATION_PCT}% max entry deviation) — skipped for safety`);
   }
 
   const isBuy = rec.direction !== 'short';
@@ -161,6 +167,13 @@ async function executeTrade(rec){
   const stopDistPct = Math.abs(currentMid - rec.stop_loss_price) / currentMid * 100;
   if(stopDistPct > MAX_STOP_LOSS_PCT){
     throw new Error(`Stop-loss is ${stopDistPct.toFixed(1)}% from price, exceeds your max stop-loss distance (${MAX_STOP_LOSS_PCT}%) — skipped for safety`);
+  }
+
+  if(rec.take_profit_price){
+    const tpDistPct = Math.abs(currentMid - rec.take_profit_price) / currentMid * 100;
+    if(tpDistPct > MAX_TAKE_PROFIT_PCT){
+      throw new Error(`Take-profit is ${tpDistPct.toFixed(1)}% from price, exceeds your max take-profit distance (${MAX_TAKE_PROFIT_PCT}%) — skipped for safety`);
+    }
   }
 
   const equity = await getAccountEquity();
@@ -214,6 +227,37 @@ async function executeTrade(rec){
   return { result, size, entryPx, leverage, pctEquity };
 }
 
+async function executeAndReport(rec, labelPrefix){
+  rec.status = 'processing';
+  await editStatusMessage(rec, `⏳ ${rec.coin} ${rec.direction} — ${labelPrefix}, checking current price and risk limits before placing…`);
+  try{
+    const { size, entryPx, leverage, pctEquity, result } = await executeTrade(rec);
+    rec.status = 'executed';
+    rec.executed_at = new Date().toISOString();
+
+    const labels = ['Entry', 'Stop-loss'].concat(rec.take_profit_price ? ['Take-profit'] : []);
+    const fillLines = describeOrderResult(result, labels).join('\n');
+    const snapshot = await getAccountSnapshot();
+
+    await editStatusMessage(rec,
+      `✅ ${rec.coin} ${rec.direction} — executed on ${HL_EXEC_NETWORK}\n\n`
+      + `• Target size: ${size.toFixed(5)} @ ~$${entryPx.toFixed(2)}\n`
+      + `• Leverage: ${leverage}x (${pctEquity.toFixed(1)}% of equity)\n`
+      + `${fillLines}\n\n`
+      + `${snapshot}`
+    );
+  }catch(e){
+    rec.status = 'failed';
+    rec.error = e.message;
+    const snapshot = await getAccountSnapshot();
+    await editStatusMessage(rec,
+      `⚠ ${rec.coin} ${rec.direction} — execution failed\n\n`
+      + `• Reason: ${e.message}\n\n`
+      + `${snapshot}`
+    );
+  }
+}
+
 async function handleCallback(cb, feed){
   const fromId = String(cb.from && cb.from.id);
   const [action, id] = String(cb.data || '').split(':');
@@ -241,42 +285,18 @@ async function handleCallback(cb, feed){
 
     if(action === 'deny'){
       rec.status = 'denied';
-      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Denied.' });
-      await editStatusMessage(rec, `❌ ${rec.coin} ${rec.direction} — denied.`);
+      await tg('answerCallbackQuery', { callback_query_id: cb.id, text: rec.auto_trade ? 'Cancelled.' : 'Denied.' });
+      await editStatusMessage(rec, rec.auto_trade
+        ? `❌ ${rec.coin} ${rec.direction} — auto-trade cancelled by you before it executed.`
+        : `❌ ${rec.coin} ${rec.direction} — denied.`);
       return;
     }
 
     if(action === 'confirm'){
-      rec.status = 'processing';
       // Acknowledge immediately so a tap is never left wondering whether it registered —
       // execution (price re-check, sizing, the actual order) happens after this.
       await tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Got it — checking price and risk limits…' });
-      await editStatusMessage(rec, `⏳ ${rec.coin} ${rec.direction} — confirmed, checking current price and risk limits before placing…`);
-
-      try{
-        const { size, entryPx, leverage, pctEquity, result } = await executeTrade(rec);
-        rec.status = 'executed';
-        rec.executed_at = new Date().toISOString();
-
-        const labels = ['Entry', 'Stop-loss'].concat(rec.take_profit_price ? ['Take-profit'] : []);
-        const fillLines = describeOrderResult(result, labels).join('\n');
-        const snapshot = await getAccountSnapshot();
-
-        await editStatusMessage(rec,
-          `✅ ${rec.coin} ${rec.direction} — executed on ${HL_EXEC_NETWORK}.\n`
-          + `Target size ${size.toFixed(5)} @ ~$${entryPx.toFixed(2)}, ${leverage}x, ${pctEquity.toFixed(1)}% of equity.\n\n`
-          + `Order status:\n${fillLines}\n\n`
-          + `Account: ${snapshot}`
-        );
-      }catch(e){
-        rec.status = 'failed';
-        rec.error = e.message;
-        const snapshot = await getAccountSnapshot();
-        await editStatusMessage(rec,
-          `⚠ ${rec.coin} ${rec.direction} — execution failed: ${e.message}\n\n`
-          + `Account (unchanged): ${snapshot}`
-        );
-      }
+      await executeAndReport(rec, 'confirmed');
     }
   }catch(outerErr){
     // Last-resort safety net: whatever went wrong, however unexpected, the person should never
@@ -288,6 +308,20 @@ async function handleCallback(cb, feed){
         text: `⚠ Something went wrong processing your ${action || 'response'} for recommendation ${id || '(unknown)'}: ${outerErr.message}\n\nCheck the "Trade Agent Telegram Poller" workflow logs on GitHub for details. No trade was placed if this happened before order submission.`
       });
     }catch(e2){ console.error('Even the fallback error message failed to send:', e2.message); }
+  }
+}
+
+async function autoTradeSweep(feed){
+  const now = Date.now();
+  for(const rec of (feed.recommendations || [])){
+    if(rec.status !== 'pending' || !rec.auto_trade) continue;
+    if(now > new Date(rec.expires_at).getTime()){
+      rec.status = 'expired';
+      await editStatusMessage(rec, `⏰ ${rec.coin} ${rec.direction} — expired before auto-trade executed.`);
+      continue;
+    }
+    console.log(`Auto-trade sweep: executing ${rec.coin} ${rec.direction} (id ${rec.id})`);
+    await executeAndReport(rec, 'auto-trade');
   }
 }
 
@@ -336,6 +370,12 @@ async function main(){
 
   writeJson(OFFSET_PATH, offsetState);
   writeJson(FEED_PATH, feed);
+
+  // Auto-trade sweep runs last, after the polling loop above has had its full window to catch
+  // any Cancel taps — anything still pending and marked auto_trade at this point gets executed.
+  await autoTradeSweep(feed);
+  writeJson(FEED_PATH, feed);
+
   console.log('Poll cycle complete.');
 }
 
