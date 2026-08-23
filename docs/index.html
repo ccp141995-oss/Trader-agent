@@ -246,7 +246,7 @@
       <div class="badge" id="netBadge">Disconnected</div>
     </div>
     <div class="usdc-balance-chip" id="usdcBalanceChip" style="display:none;">
-      <span class="usdc-balance-label">Perps USDC</span>
+      <span class="usdc-balance-label">Trading USDC</span>
       <span class="usdc-balance-value" id="usdcBalanceValue">—</span>
     </div>
     <div class="usdc-balance-chip" id="spotBalanceChip" style="display:none;">
@@ -346,6 +346,7 @@
       <div class="tab" data-tab="orders">Orders</div>
       <div class="tab" data-tab="balances">Balances</div>
       <div class="tab" data-tab="agent">Agent</div>
+      <div class="tab" data-tab="history">History</div>
     </div>
     <div class="panel-body">
       <div class="panel-view active" id="view-positions">
@@ -361,6 +362,13 @@
         <div class="agent-meta" id="agentMeta">Not yet run. Needs a watchlist in Settings — add an Anthropic API key too if you want AI research, or leave it off to run on technicals only.</div>
         <div id="recList"><div class="empty-state">No recommendations yet. Run a scan to check technicals across your watchlist.</div></div>
         <div class="agent-disclaimer">Sizing and risk levels are algorithmic; rationale is AI-generated when AI research is enabled. Not financial advice. Every trade requires your explicit confirmation and is capped by the risk rules in Settings.</div>
+      </div>
+      <div class="panel-view" id="view-history">
+        <div class="agent-scan-bar">
+          <button id="clearHistoryBtn" style="border-color:var(--red);color:var(--red);">Clear all history</button>
+        </div>
+        <div class="agent-meta" id="historyMeta">Every recommendation the dashboard has ever seen, whether from a manual scan or synced from the backend bot.</div>
+        <div id="historyList"><div class="empty-state">No recommendation history yet.</div></div>
       </div>
     </div>
     <div class="log-header">
@@ -856,9 +864,7 @@
       const usdc = (state.balances || []).find(b => b.coin === 'USDC');
       return usdc ? parseFloat(usdc.total) : 0;
     }catch(e){ return null; }
-  }
-
-  function renderPositions(state){
+  }  function renderPositions(state){
     const el = document.getElementById('positionsList');
     const exitBtn = document.getElementById('emergencyExitBtn');
     const positions = (state.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0);
@@ -935,35 +941,37 @@
     const el = document.getElementById('view-balances');
     const ms = state.marginSummary || {};
     const withdrawable = state.withdrawable;
-    lastAccountValue = parseFloat(ms.accountValue) || lastAccountValue;
-    lastWithdrawable = isFinite(parseFloat(withdrawable)) ? parseFloat(withdrawable) : lastWithdrawable;
+    const perpEquity = parseFloat(ms.accountValue) || 0;
+    const spotUsdc = await loadSpotUsdcBalance();
+    const usingUnified = perpEquity <= 0 && spotUsdc > 0;
+    const effectiveEquity = perpEquity > 0 ? perpEquity : (spotUsdc || 0);
+
+    lastAccountValue = effectiveEquity || lastAccountValue;
+    lastWithdrawable = usingUnified ? spotUsdc : (isFinite(parseFloat(withdrawable)) ? parseFloat(withdrawable) : lastWithdrawable);
+
     let html = ''
-      + balLine('Account Value', fmtUsd(ms.accountValue))
-      + balLine('Withdrawable', fmtUsd(withdrawable))
+      + balLine('Account Value', fmtUsd(effectiveEquity) + (usingUnified ? ' (unified)' : ''))
+      + balLine('Withdrawable', fmtUsd(usingUnified ? spotUsdc : withdrawable))
       + balLine('Total Margin Used', fmtUsd(ms.totalMarginUsed))
       + balLine('Total Position Value', fmtUsd(ms.totalNtlPos))
       + balLine('Total Raw USD', fmtUsd(ms.totalRawUsd))
       + '<div style="font-size:10px;color:var(--muted-2);margin-top:8px;">Querying '+cfg.network+': '+cfg.address.slice(0,8)+'…'+cfg.address.slice(-6)+'</div>';
 
-    if(!parseFloat(ms.accountValue)){
-      const spotUsdc = await loadSpotUsdcBalance();
-      if(spotUsdc !== null && spotUsdc > 0){
-        html += '<div class="warn-box" style="margin-top:10px;">'
-          + 'Perps account value is $0, but you have '+fmtUsd(spotUsdc)+' USDC in your <b>Spot</b> balance on this address. '
-          + 'Hyperliquid keeps Spot and Perps balances separate — in the Hyperliquid app, transfer USDC from Spot to your Perps account before it will show up here.'
-          + '</div>';
-      } else if(spotUsdc === 0){
-        html += '<div class="warn-box" style="margin-top:10px;">'
-          + 'No funds found in either Perps or Spot for this address on '+cfg.network+'. Double-check this is the exact address you deposited/faucet\'d to, and that the network toggle in Settings matches where those funds are.'
-          + '</div>';
-      }
+    if(usingUnified){
+      html += '<div class="warn-box" style="margin-top:10px;">'
+        + 'Perps-specific state shows $0, but your Spot/unified USDC balance is '+fmtUsd(spotUsdc)+' — using that as your account value. This is expected on Hyperliquid\'s Unified Account mode (the default for most accounts now), not an error. No transfer is needed.'
+        + '</div>';
+    } else if(!effectiveEquity){
+      html += '<div class="warn-box" style="margin-top:10px;">'
+        + 'No funds found in either Perps or Spot for this address on '+cfg.network+'. Double-check this is the exact address you deposited/faucet\'d to, and that the network toggle in Settings matches where those funds are.'
+        + '</div>';
     }
     el.innerHTML = html;
 
     document.getElementById('usdcBalanceChip').style.display = 'flex';
-    document.getElementById('usdcBalanceValue').textContent = fmtUsd(ms.accountValue);
+    document.getElementById('usdcBalanceValue').textContent = fmtUsd(effectiveEquity);
     document.getElementById('acctSummary').style.display = 'flex';
-    document.getElementById('sWithdrawable').textContent = fmtUsd(withdrawable);
+    document.getElementById('sWithdrawable').textContent = fmtUsd(usingUnified ? spotUsdc : withdrawable);
     document.getElementById('sMarginUsed').textContent = fmtUsd(ms.totalMarginUsed);
   }
   function balLine(label, val){
@@ -1446,6 +1454,75 @@
     return patterns;
   }
 
+  function taComputeADX(highs, lows, closes, period){
+    const n = closes.length;
+    if(n < period*2) return null;
+    const trs=[], plusDMs=[], minusDMs=[];
+    for(let i=1;i<n;i++){
+      const upMove = highs[i]-highs[i-1];
+      const downMove = lows[i-1]-lows[i];
+      plusDMs.push((upMove>downMove && upMove>0) ? upMove : 0);
+      minusDMs.push((downMove>upMove && downMove>0) ? downMove : 0);
+      trs.push(Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1])));
+    }
+    function wilderSmooth(arr, period){
+      const out=[]; let sum=arr.slice(0,period).reduce((a,b)=>a+b,0);
+      out[period-1]=sum;
+      for(let i=period;i<arr.length;i++){ sum = sum - (sum/period) + arr[i]; out[i]=sum; }
+      return out;
+    }
+    const smoothedTR = wilderSmooth(trs, period);
+    const smoothedPlusDM = wilderSmooth(plusDMs, period);
+    const smoothedMinusDM = wilderSmooth(minusDMs, period);
+    const dxs=[];
+    for(let i=period-1;i<trs.length;i++){
+      if(smoothedTR[i]==null || smoothedTR[i]===0) continue;
+      const plusDI = 100*smoothedPlusDM[i]/smoothedTR[i];
+      const minusDI = 100*smoothedMinusDM[i]/smoothedTR[i];
+      const dx = (plusDI+minusDI)===0 ? 0 : 100*Math.abs(plusDI-minusDI)/(plusDI+minusDI);
+      dxs.push(dx);
+    }
+    if(dxs.length < period) return null;
+    const adxSeries = wilderSmooth(dxs, period).map(v=>v/period);
+    return adxSeries[adxSeries.length-1];
+  }
+
+  // ---------------- Chart screenshot (QuickChart.io, POST — same approach as the backend) ----------------
+  function buildChartConfig(coin, candles, entry, stop, target){
+    if(!candles || !candles.closes || candles.closes.length < 5) return null;
+    const data = candles.closes.map((c,i) => ({ x: i, o: candles.opens[i], h: candles.highs[i], l: candles.lows[i], c: candles.closes[i] }));
+    const annotations = {};
+    if(entry) annotations.entry = { type:'line', yMin:entry, yMax:entry, borderColor:'#4a90d9', borderWidth:1.5, label:{ content:'Entry', enabled:true, position:'start', backgroundColor:'#4a90d9' } };
+    if(stop) annotations.stop = { type:'line', yMin:stop, yMax:stop, borderColor:'#ff5c5c', borderWidth:1.5, label:{ content:'Stop', enabled:true, position:'end', backgroundColor:'#ff5c5c' } };
+    if(target) annotations.target = { type:'line', yMin:target, yMax:target, borderColor:'#29f19c', borderWidth:1.5, label:{ content:'Target', enabled:true, position:'end', backgroundColor:'#29f19c' } };
+    return {
+      type: 'candlestick',
+      data: { datasets: [{ label: coin, data }] },
+      options: {
+        plugins: {
+          legend: { display: false },
+          title: { display: true, text: coin + ' — last 20 x 15m candles', color: '#e8ecef' },
+          annotation: { annotations }
+        },
+        scales: { x: { display: false }, y: { ticks: { color: '#aab' } } }
+      }
+    };
+  }
+
+  async function fetchChartImageObjectUrl(config){
+    if(!config) return null;
+    try{
+      const res = await fetch('https://quickchart.io/chart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chart: config, width: 600, height: 380, backgroundColor: '#0d1117', version: '3' })
+      });
+      if(!res.ok) return null;
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    }catch(e){ return null; }
+  }
+
   async function loadTimeframeTechnicals(coin, interval){
     try{
       const endTime = Date.now();
@@ -1462,14 +1539,16 @@
       const bbUpper = (sma20!=null && bbSd!=null) ? sma20 + 2*bbSd : null;
       const bbLower = (sma20!=null && bbSd!=null) ? sma20 - 2*bbSd : null;
       const { resistanceLevels, supportLevels } = taFindSupportResistance(highs, lows);
+      const adx14 = taComputeADX(highs, lows, closes, 14);
+      const recentCandles = { opens: opens.slice(-20), highs: highs.slice(-20), lows: lows.slice(-20), closes: closes.slice(-20) };
       return {
         interval, lastClose: closes[closes.length-1], rsi14, sma20, sma50,
-        macd, macdSignal: signal, macdHist: hist,
+        macd, macdSignal: signal, macdHist: hist, adx14,
         bbUpper, bbMid: sma20, bbLower, volSma20: taSma(vols,20), lastVol: vols[vols.length-1],
         patterns: taDetectPatterns(opens,highs,lows,closes),
         chartPatterns: taDetectChartPatterns(highs,lows,closes),
         swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50)),
-        resistanceLevels, supportLevels
+        resistanceLevels, supportLevels, recentCandles
       };
     }catch(e){ return null; }
   }
@@ -1515,6 +1594,7 @@
       return '  ' + iv + ': price $'+f(t.lastClose,2)+', RSI14 '+f(t.rsi14,1)
         + ', SMA20 $'+f(t.sma20,2)+'/SMA50 $'+f(t.sma50,2)
         + ', MACD hist '+f(t.macdHist,4)
+        + ', ADX14 '+f(t.adx14,1)+' ('+(t.adx14==null?'n/a':t.adx14>=25?'trending':t.adx14>=20?'developing':'weak/ranging')+')'
         + ', Bollinger $'+f(t.bbLower,2)+'-$'+f(t.bbUpper,2)
         + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none')
         + ', chart patterns: '+chartPatternStr
@@ -1625,9 +1705,12 @@
     const rsiOverbought = t.rsi14 != null && t.rsi14 > 65;
     const chartBull = (t.chartPatterns||[]).some(cp => ['double_bottom','inverse_head_and_shoulders','ascending_triangle','falling_wedge'].includes(cp.name));
     const chartBear = (t.chartPatterns||[]).some(cp => ['double_top','head_and_shoulders','descending_triangle','rising_wedge'].includes(cp.name));
+    const strongTrend = t.adx14 != null && t.adx14 >= 25;
+    const trendUp = t.sma20 != null && t.lastClose > t.sma20;
+    const trendDown = t.sma20 != null && t.lastClose < t.sma20;
 
-    const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold', chartBull && 'bullish chart pattern'].filter(Boolean);
-    const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought', chartBear && 'bearish chart pattern'].filter(Boolean);
+    const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold', chartBull && 'bullish chart pattern', (strongTrend && trendUp) && 'strong trend (ADX)'].filter(Boolean);
+    const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought', chartBear && 'bearish chart pattern', (strongTrend && trendDown) && 'strong trend (ADX)'].filter(Boolean);
 
     if(bullFactors.length >= 2 && bullFactors.length > bearFactors.length){
       return { direction:'long', confirming: bullFactors, pattern: t.patterns.filter(p=>bullPatterns.includes(p)).join(', ') || 'momentum confluence (no single candle pattern)' };
@@ -1731,12 +1814,15 @@
   // ---------------- Confluence-based conviction (computed in code, not left to the model's own label) ----------------
   const ALL_CONFLUENCE_FACTORS = ['candlestick_pattern','chart_pattern','macd_agreement','rsi_agreement','bollinger_band_position','support_resistance_confluence','oi_momentum'];
 
-  function computeConviction(rec){
+  function computeConviction(rec, technicals){
     const factors = (rec.confluence_factors || []).filter(f => ALL_CONFLUENCE_FACTORS.includes(f));
     rec.confluence_factors = factors;
-    rec.confluence_score = factors.length;
-    if(factors.length >= 5) return 'high';
-    if(factors.length >= 3) return 'medium';
+    const adx = technicals && technicals.adx14;
+    rec.trend_strength = adx == null ? null : (adx >= 25 ? 'trending' : adx >= 20 ? 'developing' : 'weak/ranging');
+    const adxBonus = (adx != null && adx >= 25) ? 1 : 0;
+    rec.confluence_score = factors.length + adxBonus;
+    if(rec.confluence_score >= 6) return 'high';
+    if(rec.confluence_score >= 3) return 'medium';
     return 'low';
   }
 
@@ -1971,12 +2057,14 @@
 
       if(!usedFallback){
         newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], cfg.maxStopLossPct, cfg.defaultTakeProfitPct, cfg.maxTakeProfitPct, cfg.maxEntryDeviationPct));
-        newRecs.forEach(rec => { rec.conviction = computeConviction(rec); rec.source = 'manual'; });
+        newRecs.forEach(rec => { rec.conviction = computeConviction(rec, technicals[rec.coin]); rec.source = 'manual'; });
       } else {
         newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; rec.source = 'manual-fallback'; });
       }
       newRecs.forEach(rec => { if(!rec.id) rec.id = rec.coin + '-' + Date.now() + '-' + Math.random().toString(36).slice(2,7); });
+      newRecs.forEach(rec => { if(technicals[rec.coin] && technicals[rec.coin].recentCandles) rec.chart_candles = technicals[rec.coin].recentCandles; });
 
+      recordHistory(newRecs);
       recommendations = newRecs.concat(recommendations).slice(0, 10);
       renderRecommendations();
       metaEl.textContent = 'Last scan: ' + new Date().toLocaleTimeString() + ' — ' + newRecs.length + ' idea(s) found across ' + alignedCoins.join(', ') + (usedFallback ? ' (technicals-only)' : ' (AI-researched)');
@@ -2016,6 +2104,33 @@
     }catch(e){ log('Auto-scan signal check failed: ' + e.message, 'err'); }
   }
 
+  function renderFullDetailHtml(r){
+    const lines = [];
+    lines.push('Rationale: ' + (r.rationale || '—'));
+    if(r.counterthesis) lines.push('Risk to this idea: ' + r.counterthesis);
+    if(r.counterthesis_response) lines.push('Still valid because: ' + r.counterthesis_response);
+    lines.push('Confluence: ' + ((r.confluence_factors && r.confluence_factors.length) ? r.confluence_factors.join(', ') : '—') + ' (' + (r.confluence_score != null ? r.confluence_score + '/8' : 'n/a') + ')');
+    if(r.trend_strength) lines.push('Trend: ' + r.trend_strength + ' (ADX14)');
+    if((r.resistance_levels || []).length) lines.push('Resistance: ' + r.resistance_levels.map(l => '$'+l.price+' ('+l.tests+'x)').join(', '));
+    if((r.support_levels || []).length) lines.push('Support: ' + r.support_levels.map(l => '$'+l.price+' ('+l.tests+'x)').join(', '));
+    if((r.chart_patterns || []).length) lines.push('Chart patterns: ' + r.chart_patterns.map(cp => cp.name + (cp.neckline ? ' (neckline $'+cp.neckline+(cp.confirmed?', confirmed':'')+')' : '')).join(', '));
+    lines.push('Entry $'+fmtNum(r.entry_price,2)+' · Stop $'+fmtNum(r.stop_loss_price,2)+(r.take_profit_price?' · Target $'+fmtNum(r.take_profit_price,2):''));
+    if(r.risk_flags && r.risk_flags.length) lines.push('Risk flags: ' + r.risk_flags.join(', '));
+    return '<div style="font-size:11.5px;line-height:1.7;color:var(--text);white-space:pre-line;">' + lines.join('\n') + '</div>';
+  }
+
+  async function loadChartIntoHolder(rec, holderId){
+    const holder = document.getElementById(holderId);
+    if(!holder) return;
+    if(!rec.chart_candles){ holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">No chart data saved for this recommendation.</div>'; return; }
+    holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Loading chart…</div>';
+    const config = buildChartConfig(rec.coin, rec.chart_candles, rec.entry_price, rec.stop_loss_price, rec.take_profit_price);
+    const url = await fetchChartImageObjectUrl(config);
+    holder.innerHTML = url
+      ? '<img src="'+url+'" style="width:100%;border-radius:6px;margin-top:8px;display:block;">'
+      : '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Chart unavailable (QuickChart unreachable).</div>';
+  }
+
   function renderRecommendations(){
     const el = document.getElementById('recList');
     if(!recommendations.length){ el.innerHTML = '<div class="empty-state">No compelling setups found this scan.</div>'; return; }
@@ -2034,9 +2149,9 @@
         processing: '<span class="conviction medium" style="margin-left:4px;">processing…</span>'
       }[status] || '';
       const actions = status === 'pending'
-        ? '<div class="rec-actions"><button class="rec-review" data-i="'+i+'">Review &amp; confirm</button><button class="rec-dismiss" data-i="'+i+'">Dismiss</button></div>'
-        : '<div class="rec-actions"><button class="rec-dismiss" data-i="'+i+'">Remove from list</button></div>';
-      const confluenceTag = r.confluence_score != null ? '<span class="conviction low" style="margin-left:4px;">'+r.confluence_score+'/7 factors</span>' : '';
+        ? '<div class="rec-actions"><button class="rec-review" data-i="'+i+'">Review &amp; confirm</button><button class="rec-expand" data-i="'+i+'">Expand</button><button class="rec-dismiss" data-i="'+i+'">Dismiss</button></div>'
+        : '<div class="rec-actions"><button class="rec-expand" data-i="'+i+'">Expand</button><button class="rec-dismiss" data-i="'+i+'">Remove from list</button></div>';
+      const confluenceTag = r.confluence_score != null ? '<span class="conviction low" style="margin-left:4px;">'+r.confluence_score+'/8 factors</span>' : '';
       const consistencyTag = r.self_consistent ? '<span class="conviction high" style="margin-left:4px;">verified 2x</span>' : '';
       const autoTag = r.auto_trade ? '<span class="conviction medium" style="margin-left:4px;">⚡ auto-trade</span>' : '';
       return '<div class="rec-card">'
@@ -2044,9 +2159,24 @@
         + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+confluenceTag+consistencyTag+autoTag+sourceTag+statusBadge+'</span></div>'
         + '<div class="rec-catalyst"><b>'+(r.pattern||'Pattern n/a')+'</b>'+((r.indicators_confirming&&r.indicators_confirming.length)?' — '+r.indicators_confirming.join(', '):'')+'</div>'
         + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+'</div>'
-        + actions + '</div>';
+        + actions
+        + '<div id="rec-detail-'+i+'" style="display:none;margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px;"></div>'
+        + '</div>';
     }).join('');
     el.querySelectorAll('.rec-review').forEach(btn => btn.addEventListener('click', ()=> openConfirmModal(recommendations[parseInt(btn.dataset.i,10)])));
+    el.querySelectorAll('.rec-expand').forEach(btn => btn.addEventListener('click', async ()=>{
+      const idx = parseInt(btn.dataset.i,10);
+      const rec = recommendations[idx];
+      const detailEl = document.getElementById('rec-detail-'+idx);
+      const isOpen = detailEl.style.display !== 'none';
+      detailEl.style.display = isOpen ? 'none' : 'block';
+      btn.textContent = isOpen ? 'Expand' : 'Collapse';
+      if(!isOpen && !detailEl.dataset.loaded){
+        detailEl.dataset.loaded = '1';
+        detailEl.innerHTML = renderFullDetailHtml(rec) + '<div id="rec-chart-'+idx+'"></div>';
+        loadChartIntoHolder(rec, 'rec-chart-'+idx);
+      }
+    }));
     el.querySelectorAll('.rec-dismiss').forEach(btn => btn.addEventListener('click', ()=>{
       const idx = parseInt(btn.dataset.i,10);
       const rec = recommendations[idx];
@@ -2059,6 +2189,67 @@
     }));
   }
 
+  // ---------------- Recommendation history (local log, independent of the live pending list) ----------------
+  function loadHistory(){
+    try{ return JSON.parse(localStorage.getItem('hlDash_recHistory') || '[]'); }catch(e){ return []; }
+  }
+  function saveHistory(hist){
+    localStorage.setItem('hlDash_recHistory', JSON.stringify(hist));
+  }
+  function recordHistory(recs){
+    if(!recs || !recs.length) return;
+    let hist = loadHistory();
+    const existingIds = new Set(hist.map(r => r.id));
+    const fresh = recs.filter(r => r.id && !existingIds.has(r.id)).map(r => Object.assign({}, r, { recorded_at: new Date().toISOString() }));
+    if(!fresh.length) return;
+    hist = fresh.concat(hist).slice(0, 150);
+    saveHistory(hist);
+    if(document.getElementById('view-history').classList.contains('active')) renderHistoryView();
+  }
+  function updateHistoryStatus(id, status){
+    const hist = loadHistory();
+    const entry = hist.find(r => r.id === id);
+    if(entry){ entry.status = status; saveHistory(hist); }
+  }
+
+  function renderHistoryView(){
+    const el = document.getElementById('historyList');
+    const hist = loadHistory();
+    if(!hist.length){ el.innerHTML = '<div class="empty-state">No recommendation history yet.</div>'; return; }
+    el.innerHTML = hist.map((r, i) => {
+      const isLong = r.direction === 'long';
+      const when = r.generated_at ? new Date(r.generated_at).toLocaleString() : (r.recorded_at ? new Date(r.recorded_at).toLocaleString() : '');
+      return '<div class="rec-card">'
+        + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
+        + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'
+        + '<span class="conviction low" style="margin-left:4px;">'+(r.status||'pending')+'</span></span></div>'
+        + '<div class="rec-catalyst"><b>'+(r.pattern||'Pattern n/a')+'</b></div>'
+        + '<div class="rec-horizon">'+when+'</div>'
+        + '<div class="rec-actions"><button class="hist-expand" data-i="'+i+'">Expand</button><button class="hist-delete" data-id="'+r.id+'">Delete</button></div>'
+        + '<div id="hist-detail-'+i+'" style="display:none;margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px;"></div>'
+        + '</div>';
+    }).join('');
+    el.querySelectorAll('.hist-expand').forEach(btn => btn.addEventListener('click', async ()=>{
+      const idx = parseInt(btn.dataset.i,10);
+      const rec = hist[idx];
+      const detailEl = document.getElementById('hist-detail-'+idx);
+      const isOpen = detailEl.style.display !== 'none';
+      detailEl.style.display = isOpen ? 'none' : 'block';
+      btn.textContent = isOpen ? 'Expand' : 'Collapse';
+      if(!isOpen && !detailEl.dataset.loaded){
+        detailEl.dataset.loaded = '1';
+        detailEl.innerHTML = renderFullDetailHtml(rec) + '<div id="hist-chart-'+idx+'"></div>';
+        loadChartIntoHolder(rec, 'hist-chart-'+idx);
+      }
+    }));
+    el.querySelectorAll('.hist-delete').forEach(btn => btn.addEventListener('click', ()=>{
+      let h = loadHistory();
+      h = h.filter(r => r.id !== btn.dataset.id);
+      saveHistory(h);
+      renderHistoryView();
+    }));
+  }
+
   async function pollBackendFeed(){
     try{
       const res = await fetch(BACKEND_FEED_URL, { cache:'no-store' });
@@ -2068,20 +2259,24 @@
       const byId = {};
       recommendations.forEach(r => { if(r.id) byId[r.id] = r; });
       let freshCount = 0;
+      const freshRecs = [];
       incoming.forEach(r => {
         if(byId[r.id]){
           // sync status changes (e.g. confirmed/denied on Telegram) into what's already shown
           Object.assign(byId[r.id], r);
+          updateHistoryStatus(r.id, r.status);
         } else {
           recommendations.unshift(r);
           freshCount++;
+          freshRecs.push(r);
         }
       });
       recommendations = recommendations.slice(0, 15);
+      recordHistory(freshRecs);
       renderRecommendations();
       if(freshCount){
         log('Backend scan found ' + freshCount + ' new recommendation(s)', 'ok');
-        notifyNewRecommendations(incoming.filter(r => !byId[r.id]));
+        notifyNewRecommendations(freshRecs);
         document.getElementById('agentMeta').textContent = 'Backend scan synced: ' + new Date().toLocaleTimeString() + ' — ' + freshCount + ' new idea(s).';
       }
     }catch(e){ /* file may not exist yet on a fresh Pages deploy, or running from a local file:// — ignore */ }
@@ -2593,11 +2788,18 @@
         tab.classList.add('active');
         document.querySelectorAll('.panel-view').forEach(v=>v.classList.remove('active'));
         document.getElementById('view-'+tab.dataset.tab).classList.add('active');
+        if(tab.dataset.tab === 'history') renderHistoryView();
       });
     });
 
     document.getElementById('scanBtn').addEventListener('click', ()=> runAgentScan());
     document.getElementById('emergencyExitBtn').addEventListener('click', emergencyExitAll);
+    document.getElementById('clearHistoryBtn').addEventListener('click', ()=>{
+      if(!confirm('Clear all recommendation history? This cannot be undone.')) return;
+      localStorage.setItem('hlDash_recHistory', '[]');
+      renderHistoryView();
+      log('Recommendation history cleared', 'ok');
+    });
 
     document.getElementById('expandLogBtn').addEventListener('click', ()=>{
       const container = document.getElementById('logContainer');
