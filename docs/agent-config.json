@@ -4,13 +4,13 @@
   "filteredTopN": 50,
   "filteredMinOI": 100000,
   "filteredMinVolume24h": 200000,
-  "maxPositionPct": 25,
-  "maxLeverage": 3,
+  "maxPositionPct": 100,
+  "maxLeverage": 10,
   "defaultTakeProfitPct": 50,
   "maxStopLossPct": 20,
   "maxTakeProfitPct": 150,
   "maxEntryDeviationPct": 2,
   "aiResearchEnabled": true,
   "autoTradeEnabled": false,
-  "updated_at": "2026-08-23T19:51:22.593Z"
+  "updated_at": "2026-08-23T21:03:15.622Z"
 }
