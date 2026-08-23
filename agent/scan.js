@@ -479,6 +479,40 @@ function detectChartPatterns(highs, lows, closes){
 }
 
 // ---------------- Per-timeframe technicals ----------------
+// ---------------- ADX: trend strength, independent from directional bias ----------------
+function computeADX(highs, lows, closes, period){
+  const n = closes.length;
+  if(n < period*2) return null;
+  const trs=[], plusDMs=[], minusDMs=[];
+  for(let i=1;i<n;i++){
+    const upMove = highs[i]-highs[i-1];
+    const downMove = lows[i-1]-lows[i];
+    plusDMs.push((upMove>downMove && upMove>0) ? upMove : 0);
+    minusDMs.push((downMove>upMove && downMove>0) ? downMove : 0);
+    trs.push(Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1])));
+  }
+  function wilderSmooth(arr, period){
+    const out=[]; let sum=arr.slice(0,period).reduce((a,b)=>a+b,0);
+    out[period-1]=sum;
+    for(let i=period;i<arr.length;i++){ sum = sum - (sum/period) + arr[i]; out[i]=sum; }
+    return out;
+  }
+  const smoothedTR = wilderSmooth(trs, period);
+  const smoothedPlusDM = wilderSmooth(plusDMs, period);
+  const smoothedMinusDM = wilderSmooth(minusDMs, period);
+  const dxs=[];
+  for(let i=period-1;i<trs.length;i++){
+    if(smoothedTR[i]==null || smoothedTR[i]===0) continue;
+    const plusDI = 100*smoothedPlusDM[i]/smoothedTR[i];
+    const minusDI = 100*smoothedMinusDM[i]/smoothedTR[i];
+    const dx = (plusDI+minusDI)===0 ? 0 : 100*Math.abs(plusDI-minusDI)/(plusDI+minusDI);
+    dxs.push(dx);
+  }
+  if(dxs.length < period) return null;
+  const adxSeries = wilderSmooth(dxs, period).map(v=>v/period);
+  return adxSeries[adxSeries.length-1];
+}
+
 async function loadTimeframeTechnicals(coin, interval){
   try{
     const endTime = Date.now();
@@ -501,13 +535,15 @@ async function loadTimeframeTechnicals(coin, interval){
     const patterns = detectPatterns(opens, highs, lows, closes);
     const chartPatterns = detectChartPatterns(highs, lows, closes);
     const { resistanceLevels, supportLevels } = findSupportResistance(highs, lows);
+    const adx14 = computeADX(highs, lows, closes, 14);
+    const last20 = { opens: opens.slice(-20), highs: highs.slice(-20), lows: lows.slice(-20), closes: closes.slice(-20) };
 
     return {
       interval, lastClose: closes[closes.length-1], rsi14, sma20, sma50,
-      macd, macdSignal: signal, macdHist: hist,
+      macd, macdSignal: signal, macdHist: hist, adx14,
       bbUpper, bbMid: sma20, bbLower, volSma20: sma(vols,20), lastVol: vols[vols.length-1],
       patterns, chartPatterns, swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50)),
-      resistanceLevels, supportLevels
+      resistanceLevels, supportLevels, recentCandles: last20
     };
   }catch(e){ console.error('Technicals failed for ' + coin + ' (' + interval + '):', e.message); return null; }
 }
@@ -553,6 +589,7 @@ function formatMultiTimeframeBlock(coin, mtf, alignment){
     return '  ' + iv + ': price $'+fmt(t.lastClose,2)+', RSI14 '+fmt(t.rsi14,1)
       + ', SMA20 $'+fmt(t.sma20,2)+'/SMA50 $'+fmt(t.sma50,2)
       + ', MACD hist '+fmt(t.macdHist,4)
+      + ', ADX14 '+fmt(t.adx14,1)+' ('+(t.adx14==null?'n/a':t.adx14>=25?'trending':t.adx14>=20?'developing':'weak/ranging')+')'
       + ', Bollinger $'+fmt(t.bbLower,2)+'-$'+fmt(t.bbUpper,2)
       + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none')
       + ', chart patterns: '+chartPatternStr
@@ -625,7 +662,8 @@ function buildAgentPrompt(signals, mtfData, alignments){
     + "Your ENTIRE basis for every recommendation is technical and market-structure analysis: candlestick patterns (both single-candle and multi-candle "
     + "structures like three soldiers/crows, morning/evening stars, three-line strikes), classic chart patterns (double tops/bottoms, head and shoulders, "
     + "triangles, wedges — noting whether a pattern's neckline has actually been confirmed or is still forming), agreement from popular indicators (RSI, MACD, "
-    + "Bollinger Bands, moving averages) across timeframes, support/resistance levels with their test counts, order-book imbalance, and open-interest momentum "
+    + "Bollinger Bands, moving averages, and ADX (trend strength — above 25 means genuinely trending, below 20 means weak/ranging and any directional signal there "
+    + "deserves less weight) across timeframes, support/resistance levels with their test counts, order-book imbalance, and open-interest momentum "
     + "(rising OI + rising price is a fresh long buildup and a stronger signal than the same price move on falling OI, which is likely just short-covering — "
     + "weight OI momentum accordingly). You have no access to news or social sentiment and should not reference or assume any. "
     + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
@@ -655,12 +693,17 @@ function buildAgentPrompt(signals, mtfData, alignments){
 // ---------------- Confluence-based conviction (computed in code, not left to the model's own label) ----------------
 const ALL_CONFLUENCE_FACTORS = ['candlestick_pattern','chart_pattern','macd_agreement','rsi_agreement','bollinger_band_position','support_resistance_confluence','oi_momentum'];
 
-function computeConviction(rec){
+function computeConviction(rec, technicals){
   const factors = (rec.confluence_factors || []).filter(f => ALL_CONFLUENCE_FACTORS.includes(f));
   rec.confluence_factors = factors; // drop anything the model invented outside the known list
-  rec.confluence_score = factors.length;
-  if(factors.length >= 5) return 'high';
-  if(factors.length >= 3) return 'medium';
+  // ADX is an objective, code-computed bonus — not self-reported by the model — so it can't be
+  // padded. A genuinely strong trend (ADX >= 25) on the 15m reference timeframe adds one point.
+  const adx = technicals && technicals.adx14;
+  rec.trend_strength = adx == null ? null : (adx >= 25 ? 'trending' : adx >= 20 ? 'developing' : 'weak/ranging');
+  const adxBonus = (adx != null && adx >= 25) ? 1 : 0;
+  rec.confluence_score = factors.length + adxBonus;
+  if(rec.confluence_score >= 6) return 'high';
+  if(rec.confluence_score >= 3) return 'medium';
   return 'low';
 }
 
@@ -796,9 +839,12 @@ function technicalOnlySignal(t){
   const rsiOverbought = t.rsi14 != null && t.rsi14 > 65;
   const chartBull = (t.chartPatterns||[]).some(cp => ['double_bottom','inverse_head_and_shoulders','ascending_triangle','falling_wedge'].includes(cp.name));
   const chartBear = (t.chartPatterns||[]).some(cp => ['double_top','head_and_shoulders','descending_triangle','rising_wedge'].includes(cp.name));
+  const strongTrend = t.adx14 != null && t.adx14 >= 25;
+  const trendUp = t.sma20 != null && t.lastClose > t.sma20;
+  const trendDown = t.sma20 != null && t.lastClose < t.sma20;
 
-  const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold', chartBull && 'bullish chart pattern'].filter(Boolean);
-  const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought', chartBear && 'bearish chart pattern'].filter(Boolean);
+  const bullFactors = [hasBull && 'candlestick pattern', macdBull && 'MACD histogram positive', nearLowerBand && 'price at lower Bollinger Band', rsiOversold && 'RSI oversold', chartBull && 'bullish chart pattern', (strongTrend && trendUp) && 'strong trend (ADX)'].filter(Boolean);
+  const bearFactors = [hasBear && 'candlestick pattern', macdBear && 'MACD histogram negative', nearUpperBand && 'price at upper Bollinger Band', rsiOverbought && 'RSI overbought', chartBear && 'bearish chart pattern', (strongTrend && trendDown) && 'strong trend (ADX)'].filter(Boolean);
 
   if(bullFactors.length >= 2 && bullFactors.length > bearFactors.length){
     return { direction: 'long', confirming: bullFactors, pattern: t.patterns.filter(p=>bullPatterns.includes(p)).join(', ') || 'momentum confluence (no single candle pattern)' };
@@ -900,6 +946,75 @@ async function callAnthropicWithSelfConsistency(system, user){
   return { recommendations: merged };
 }
 
+// ---------------- Chart screenshot (QuickChart.io — no native canvas/Cairo dependency needed in CI) ----------------
+// POST, not GET: a GET-encoded chart config for ~20 candles runs 4,000+ characters, which risks
+// silent truncation/rejection by QuickChart or Telegram. POST has no such limit, and returns the
+// rendered PNG bytes directly, which we then upload to Telegram via multipart form data.
+function buildChartConfig(coin, candles, entry, stop, target){
+  if(!candles || !candles.closes || candles.closes.length < 5) return null;
+  const data = candles.closes.map((c,i) => ({ x: i, o: candles.opens[i], h: candles.highs[i], l: candles.lows[i], c: candles.closes[i] }));
+  const annotations = {};
+  if(entry) annotations.entry = { type:'line', yMin:entry, yMax:entry, borderColor:'#4a90d9', borderWidth:1.5, label:{ content:'Entry', enabled:true, position:'start', backgroundColor:'#4a90d9' } };
+  if(stop) annotations.stop = { type:'line', yMin:stop, yMax:stop, borderColor:'#ff5c5c', borderWidth:1.5, label:{ content:'Stop', enabled:true, position:'end', backgroundColor:'#ff5c5c' } };
+  if(target) annotations.target = { type:'line', yMin:target, yMax:target, borderColor:'#29f19c', borderWidth:1.5, label:{ content:'Target', enabled:true, position:'end', backgroundColor:'#29f19c' } };
+
+  return {
+    type: 'candlestick',
+    data: { datasets: [{ label: coin, data }] },
+    options: {
+      plugins: {
+        legend: { display: false },
+        title: { display: true, text: coin + ' — last 20 x 15m candles', color: '#e8ecef' },
+        annotation: { annotations }
+      },
+      scales: {
+        x: { display: false },
+        y: { ticks: { color: '#aab' } }
+      }
+    }
+  };
+}
+
+async function fetchChartImageBuffer(config){
+  if(!config) return null;
+  try{
+    const res = await fetch('https://quickchart.io/chart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chart: config, width: 600, height: 380, backgroundColor: '#0d1117', version: '3' })
+    });
+    if(!res.ok){ console.error('QuickChart render failed: HTTP ' + res.status); return null; }
+    const arrBuf = await res.arrayBuffer();
+    return Buffer.from(arrBuf);
+  }catch(e){ console.error('QuickChart render threw:', e.message); return null; }
+}
+
+async function sendTelegramPhotoBuffer(buffer, caption, attempt){
+  attempt = attempt || 1;
+  if(!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID || !buffer) return false;
+  try{
+    const form = new FormData();
+    form.append('chat_id', TELEGRAM_CHAT_ID);
+    form.append('caption', (caption || '').slice(0, 1000));
+    form.append('photo', new Blob([buffer], { type: 'image/png' }), 'chart.png');
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+      method: 'POST',
+      body: form
+    });
+    const data = await res.json();
+    if(!res.ok || !data.ok){
+      console.error('Telegram sendPhoto failed:', data.description || res.status);
+      if(attempt < 2){ await new Promise(r=>setTimeout(r,1000)); return sendTelegramPhotoBuffer(buffer, caption, attempt+1); }
+      return false;
+    }
+    return true;
+  }catch(e){
+    console.error('Telegram sendPhoto threw:', e.message);
+    if(attempt < 2){ await new Promise(r=>setTimeout(r,1000)); return sendTelegramPhotoBuffer(buffer, caption, attempt+1); }
+    return false;
+  }
+}
+
 async function sendTelegram(text, replyMarkup, attempt){
   attempt = attempt || 1;
   if(!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID){
@@ -939,7 +1054,8 @@ function formatTelegramMessage(rec){
   const consistencyNote = rec.self_consistent ? ' · verified on independent re-check' : '';
 
   const lines = [];
-  lines.push(`🤖 JARVIS Trade Agent — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction, ${rec.confluence_score != null ? rec.confluence_score + '/7 factors' : 'n/a'}${consistencyNote})${fallbackNote}`);
+  lines.push(`🤖 JARVIS Trade Agent — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction, ${rec.confluence_score != null ? rec.confluence_score + '/8 factors' : 'n/a'}${consistencyNote})${fallbackNote}`);
+  if(rec.trend_strength) lines.push(`• Trend: ${rec.trend_strength} (ADX14)`);
   lines.push('');
   lines.push(`• Pattern: ${rec.pattern || '—'}`);
   lines.push(`• Confirming: ${confirming}`);
@@ -1009,9 +1125,9 @@ async function main(){
     console.log('No signal tripped this run.');
     return;
   }
-  console.log('Signal tripped on: ' + tripped.join(', '));
+  console.log('=== PHASE 1 COMPLETE: scan/signal-check ===  Signal tripped on: ' + tripped.join(', '));
 
-  console.log('Checking multi-timeframe alignment (15m/1h/4h) for: ' + tripped.join(', '));
+  console.log('=== PHASE 2 START: multi-timeframe + technical analysis ===');
   const mtfData = {};
   const alignments = {};
   for(const c of tripped){
@@ -1077,11 +1193,11 @@ async function main(){
     }
     state.lastAiCallTime = Date.now(); // resets the cooldown whether the call succeeded or failed
   }
-  console.log('Got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only)' : ' (AI-researched, self-consistent)') + '.');
+  console.log('=== PHASE 2 COMPLETE: got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only)' : ' (AI-researched, self-consistent)') + ' ===');
 
   if(!usedFallback){
     newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT, MAX_TAKE_PROFIT_PCT, MAX_ENTRY_DEVIATION_PCT));
-    newRecs.forEach(rec => { rec.conviction = computeConviction(rec); });
+    newRecs.forEach(rec => { rec.conviction = computeConviction(rec, technicals[rec.coin]); });
   } else {
     newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; });
   }
@@ -1097,6 +1213,7 @@ async function main(){
     }
   });
 
+  console.log('=== PHASE 3 START: all analysis finalized, sending Telegram now for ' + newRecs.length + ' rec(s) ===');
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + EXECUTION_WINDOW_MIN * 60000).toISOString();
   for(const rec of newRecs){
@@ -1106,6 +1223,24 @@ async function main(){
     rec.source = usedFallback ? 'backend-fallback' : 'backend';
     rec.status = 'pending';
     rec.auto_trade = AUTO_TRADE_ENABLED;
+
+    const t15 = technicals[rec.coin];
+    if(t15 && t15.recentCandles){
+      // Persist the compact candle data (not the rendered image) so the dashboard and history
+      // log can re-render the same chart later without needing the full technicals object.
+      rec.chart_candles = t15.recentCandles;
+      const chartConfig = buildChartConfig(rec.coin, t15.recentCandles, rec.entry_price, rec.stop_loss_price, rec.take_profit_price);
+      const chartBuffer = await fetchChartImageBuffer(chartConfig);
+      if(chartBuffer){
+        const sent = await sendTelegramPhotoBuffer(chartBuffer, `${rec.coin} ${rec.direction === 'short' ? 'SHORT' : 'LONG'} — ${rec.pattern || ''}`.slice(0,200));
+        rec.chart_image_sent = sent;
+        if(!sent) console.error(`Chart image failed to send for ${rec.coin} — continuing with the text message anyway.`);
+      } else {
+        console.error(`Chart image render failed for ${rec.coin} (QuickChart unreachable or errored) — continuing with the text message anyway.`);
+        rec.chart_image_sent = false;
+      }
+    }
+
     const replyMarkup = AUTO_TRADE_ENABLED
       ? { inline_keyboard: [[ { text: '❌ Cancel', callback_data: 'deny:' + rec.id } ]] }
       : { inline_keyboard: [[

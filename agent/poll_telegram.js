@@ -32,7 +32,7 @@ const INFO_URL = HL_EXEC_NETWORK === 'mainnet' ? 'https://api.hyperliquid.xyz/in
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
 const OFFSET_PATH = path.join(__dirname, 'telegram_offset.json');
 const SHARED_CONFIG_PATH = path.join(__dirname, '..', 'docs', 'agent-config.json');
-const POLL_BUDGET_MS = 4 * 60 * 1000; // stay comfortably under the 5-minute schedule
+const POLL_BUDGET_MS = 2.5 * 60 * 1000; // leave real breathing room in the shared concurrency queue for the scanner
 
 function readJson(p, fallback){ try{ return JSON.parse(fs.readFileSync(p, 'utf8')); }catch(e){ return fallback; } }
 function writeJson(p, obj){ fs.writeFileSync(p, JSON.stringify(obj, null, 2)); }
@@ -94,10 +94,36 @@ async function getCurrentMid(coin){
   return mids[coin] ? parseFloat(mids[coin]) : null;
 }
 
-async function getAccountEquity(){
+async function getSpotUsdcBalance(){
   if(!HL_ACCOUNT_ADDRESS) return null;
-  const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
-  return parseFloat((state.marginSummary || {}).accountValue) || null;
+  try{
+    const state = await infoPost({ type: 'spotClearinghouseState', user: HL_ACCOUNT_ADDRESS });
+    const usdc = (state.balances || []).find(b => b.coin === 'USDC');
+    return usdc ? parseFloat(usdc.total) : 0;
+  }catch(e){ return null; }
+}
+
+// Hyperliquid's Unified Account / Portfolio Margin modes (the default for most users as of
+// mid-2026) merge spot and perps USDC into one pool — for those accounts, the perps-specific
+// clearinghouseState can legitimately report ~$0 even with real tradeable balance sitting there,
+// because the true balance lives in the spot clearinghouse state instead (Hyperliquid's own docs:
+// "unified account and portfolio margin show all balances... in the spot clearinghouse state").
+// Standard/Manual-mode accounts still have genuinely separate balances. Rather than assume either,
+// resolve whichever endpoint actually reflects real balance.
+async function getEffectiveEquity(){
+  if(!HL_ACCOUNT_ADDRESS) return { effectiveEquity: null, perpEquity: null, spotUsdc: null, perpState: null };
+  const [perpState, spotUsdc] = await Promise.all([
+    infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch(() => null),
+    getSpotUsdcBalance()
+  ]);
+  const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
+  const effectiveEquity = perpEquity > 0 ? perpEquity : (spotUsdc || 0);
+  return { effectiveEquity, perpEquity, spotUsdc, perpState };
+}
+
+async function getAccountEquity(){
+  const { effectiveEquity } = await getEffectiveEquity();
+  return effectiveEquity || null;
 }
 
 async function getAccountSnapshot(){
@@ -107,21 +133,24 @@ async function getAccountSnapshot(){
     : HL_ACCOUNT_ADDRESS;
   const queried = `${HL_EXEC_NETWORK}: ${addrShort}`;
   try{
-    const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
-    const ms = state.marginSummary || {};
-    const openPositions = (state.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0).length;
-    const accountValue = parseFloat(ms.accountValue);
+    const { effectiveEquity, perpEquity, spotUsdc, perpState } = await getEffectiveEquity();
+    const ms = (perpState && perpState.marginSummary) || {};
+    const openPositions = perpState ? (perpState.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0).length : 0;
     const marginUsed = parseFloat(ms.totalMarginUsed);
-    const withdrawable = parseFloat(state.withdrawable);
+    const withdrawable = perpState ? parseFloat(perpState.withdrawable) : null;
+    const usingUnified = perpEquity <= 0 && spotUsdc > 0;
+
     let lines = [
-      `• Account value: $${isFinite(accountValue)?accountValue.toFixed(2):'n/a'}`,
-      `• Margin used: $${isFinite(marginUsed)?marginUsed.toFixed(2):'n/a'}`,
-      `• Investable balance: $${isFinite(withdrawable)?withdrawable.toFixed(2):'n/a'}`,
+      `• Account value: $${effectiveEquity != null ? effectiveEquity.toFixed(2) : 'n/a'}${usingUnified ? ' (from Spot/unified balance)' : ''}`,
+      `• Margin used: $${isFinite(marginUsed) ? marginUsed.toFixed(2) : '0.00'}`,
+      `• Investable balance: $${(isFinite(withdrawable) && withdrawable > 0) ? withdrawable.toFixed(2) : (effectiveEquity != null ? effectiveEquity.toFixed(2) : 'n/a')}`,
       `• Open positions: ${openPositions}`,
       `• Queried: ${queried}`
     ];
-    if(!accountValue){
-      lines.push('• If this looks wrong: check HL_EXEC_NETWORK matches your funds\' network, and HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.');
+    if(usingUnified){
+      lines.push(`• Perps-specific state showed $0, but Spot/unified USDC balance is $${spotUsdc.toFixed(2)} — using that as your account value. This is expected on Hyperliquid's Unified Account mode, not an error.`);
+    } else if(!effectiveEquity){
+      lines.push('• No funds found for this address. Double-check HL_ACCOUNT_ADDRESS is where you actually deposited/faucet\'d, and that HL_EXEC_NETWORK matches that network.');
     }
     return lines.join('\n');
   }catch(e){
@@ -179,7 +208,7 @@ async function executeTrade(rec){
   const equity = await getAccountEquity();
   if(!equity){
     const addrShort = HL_ACCOUNT_ADDRESS ? HL_ACCOUNT_ADDRESS.slice(0,6) + '…' + HL_ACCOUNT_ADDRESS.slice(-4) : '(not set)';
-    throw new Error(`Account equity read as $0 on ${HL_EXEC_NETWORK} for ${addrShort} — check HL_EXEC_NETWORK matches the network your funds are on, and that HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.`);
+    throw new Error(`No usable balance found (checked both Perps and Spot/unified) on ${HL_EXEC_NETWORK} for ${addrShort} — check HL_EXEC_NETWORK matches the network your funds are on, and that HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.`);
   }
 
   const pctEquity = Math.min(rec.suggested_size_pct_equity || MAX_POSITION_PCT, MAX_POSITION_PCT);
