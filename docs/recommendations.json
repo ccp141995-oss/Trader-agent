@@ -177,7 +177,7 @@
       "generated_at": "2026-08-23T14:55:40.974Z",
       "expires_at": "2026-08-23T17:55:40.974Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "denied",
       "telegram_message_id": 34,
       "telegram_chat_id": "1820130237"
     },
