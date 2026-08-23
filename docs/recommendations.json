@@ -1,6 +1,269 @@
 {
   "recommendations": [
     {
+      "coin": "LDO",
+      "direction": "long",
+      "pattern": "three_white_soldiers on 1h with fresh OI long buildup",
+      "indicators_confirming": [
+        "RSI 88.6/86.0 on 15m/1h showing strong momentum",
+        "MACD hist positive on 15m and 1h",
+        "price above SMA20 on all timeframes",
+        "OI +2.5% with price up = fresh long buildup",
+        "RSI 88.6 on 15m and 86.0 on 1h confirming strong momentum",
+        "MACD hist positive and rising on 1h (+0.0041)",
+        "Price above SMA20 and SMA50 on all timeframes",
+        "Bollinger upper band walk on 1h"
+      ],
+      "confluence_factors": [
+        "candlestick_pattern",
+        "macd_agreement",
+        "rsi_agreement",
+        "support_resistance_confluence",
+        "oi_momentum"
+      ],
+      "rationale": "Three white soldiers on 1h plus fresh OI long buildup confirms genuine buying. 15m bullish belt hold. Price breaking above prior $0.40 resistance with momentum. 3/3 MTF long.",
+      "counterthesis": "RSI 88+ on 15m and 1h is severely overbought; mean reversion snap could be violent and immediate.",
+      "counterthesis_response": "Fresh OI buildup confirms real buying not just short-covering; overbought can persist in momentum thrusts.",
+      "time_horizon": "1-4 hours",
+      "entry_price": 0.41,
+      "stop_loss_price": 0.39,
+      "take_profit_price": 0.45,
+      "suggested_size_pct_equity": 4,
+      "suggested_leverage": 5,
+      "risk_flags": [
+        "RSI extremely overbought 15m/1h",
+        "ask-heavy order book -71.8% conflicts with long",
+        "high funding 0.0139% signals crowded long",
+        "RSI extremely overbought 15m/1h (86-89)",
+        "Ask-heavy order book -71.8% contradicts long",
+        "High funding rate 0.0139% increases carry cost",
+        "Stop requires ~6% move against — near limit"
+      ],
+      "self_consistent": true,
+      "confluence_score": 5,
+      "conviction": "high",
+      "resistance_levels": [
+        {
+          "price": 0.37,
+          "tests": 3
+        },
+        {
+          "price": 0.36,
+          "tests": 1
+        },
+        {
+          "price": 0.37,
+          "tests": 1
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 0.35,
+          "tests": 2
+        },
+        {
+          "price": 0.36,
+          "tests": 2
+        },
+        {
+          "price": 0.35,
+          "tests": 1
+        }
+      ],
+      "chart_patterns": [
+        {
+          "name": "double_top",
+          "neckline": 0.37,
+          "confirmed": false
+        }
+      ],
+      "id": "hunxqx4l59",
+      "generated_at": "2026-08-23T19:52:25.869Z",
+      "expires_at": "2026-08-23T20:22:25.869Z",
+      "source": "backend",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 47,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "NEAR",
+      "direction": "long",
+      "pattern": "bullish_engulfing on 1h and 4h with elevated volume",
+      "indicators_confirming": [
+        "RSI 79.7 on 1h showing strong momentum",
+        "MACD hist positive on 1h",
+        "SMA20 rising on 1h and 4h",
+        "5m volume 3.16x trailing average — significant volume surge",
+        "RSI 79.7 on 1h with positive MACD hist",
+        "Bullish engulfing confirmed on both 1h and 4h simultaneously",
+        "5m volume 3.16x trailing average — standout volume surge",
+        "Price above SMA20 on 1h and 4h",
+        "Bid-heavy order book +33.1%"
+      ],
+      "confluence_factors": [
+        "candlestick_pattern",
+        "macd_agreement",
+        "rsi_agreement",
+        "support_resistance_confluence",
+        "oi_momentum"
+      ],
+      "rationale": "Dual bullish engulfing on 1h and 4h with 3.16x volume surge confirms strong buying. 3/3 MTF long. Price approaching unconfirmed double bottom neckline $1.99 breakout.",
+      "counterthesis": "1h RSI 79.7 near overbought and rising wedge on 1h signals price may stall or reverse at $1.99 resistance.",
+      "counterthesis_response": "Volume surge at key resistance is breakout behavior; engulfing candles on two timeframes add high-quality confirmation.",
+      "time_horizon": "2-6 hours",
+      "entry_price": 1.97,
+      "stop_loss_price": 1.9,
+      "take_profit_price": 2.08,
+      "suggested_size_pct_equity": 4,
+      "suggested_leverage": 5,
+      "risk_flags": [
+        "Rising wedge on 1h warns of reversal",
+        "Double bottom neckline $1.99 not yet confirmed — could reject",
+        "OI momentum flat reduces conviction",
+        "1h RSI 79.7 overbought",
+        "4x-tested resistance directly at entry",
+        "Rising wedge on 1h adds reversal risk",
+        "Stop is ~4.6% away — acceptable but watch closely"
+      ],
+      "self_consistent": true,
+      "confluence_score": 5,
+      "conviction": "high",
+      "resistance_levels": [
+        {
+          "price": 1.97,
+          "tests": 4
+        },
+        {
+          "price": 1.85,
+          "tests": 2
+        },
+        {
+          "price": 1.93,
+          "tests": 2
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 1.87,
+          "tests": 2
+        },
+        {
+          "price": 1.94,
+          "tests": 2
+        },
+        {
+          "price": 1.8,
+          "tests": 1
+        }
+      ],
+      "chart_patterns": [
+        {
+          "name": "double_bottom",
+          "neckline": 1.99,
+          "confirmed": false
+        }
+      ],
+      "id": "x3u9c24lm0",
+      "generated_at": "2026-08-23T19:52:25.869Z",
+      "expires_at": "2026-08-23T20:22:25.869Z",
+      "source": "backend",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 48,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "GRAM",
+      "direction": "long",
+      "pattern": "double_bottom and inverse_H&S both confirmed on 1h",
+      "indicators_confirming": [
+        "RSI 70.1 on 1h in bullish zone",
+        "MACD hist positive on 1h and 4h",
+        "Price above SMA20 on all timeframes",
+        "4h MACD positive and holding",
+        "Both double bottom and inverse H&S necklines confirmed on 1h",
+        "MACD hist positive on 1h (+0.0032) and 4h (+0.0024)",
+        "RSI 70.1 on 1h with price above SMA20/SMA50",
+        "Bid-heavy order book +53.5%",
+        "Strong support at $1.43 tested 5x"
+      ],
+      "confluence_factors": [
+        "candlestick_pattern",
+        "chart_pattern",
+        "macd_agreement",
+        "rsi_agreement",
+        "support_resistance_confluence"
+      ],
+      "rationale": "Rare dual confirmation: both double bottom (neckline $1.48) and inverse H&S (neckline $1.47) confirmed on 1h. 4h MACD positive. Strong $1.43 support tested 5x.",
+      "counterthesis": "1h bearish engulfing candle appearing after confirmed breakout suggests early exhaustion at $1.52-$1.54 resistance zone.",
+      "counterthesis_response": "Pattern confirmations are already valid; pullback to $1.50-$1.51 is buyable — structure remains intact above $1.48.",
+      "time_horizon": "2-8 hours",
+      "entry_price": 1.52,
+      "stop_loss_price": 1.46,
+      "take_profit_price": 1.62,
+      "suggested_size_pct_equity": 3,
+      "suggested_leverage": 4,
+      "risk_flags": [
+        "Bearish engulfing on 1h suggests near-term hesitation",
+        "Wide spread 0.046% increases slippage cost",
+        "Low volume 0.02x trailing average — lack of participation",
+        "Bearish engulfing on 1h at current price is concerning",
+        "Very low 5m volume (0.02x avg) — thin participation",
+        "Wide spread 0.046% adds slippage risk",
+        "OI declining slightly (-0.7%) — not fresh long buildup"
+      ],
+      "self_consistent": true,
+      "confluence_score": 5,
+      "conviction": "high",
+      "resistance_levels": [
+        {
+          "price": 1.45,
+          "tests": 3
+        },
+        {
+          "price": 1.46,
+          "tests": 2
+        },
+        {
+          "price": 1.54,
+          "tests": 2
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 1.43,
+          "tests": 5
+        },
+        {
+          "price": 1.5,
+          "tests": 2
+        },
+        {
+          "price": 1.43,
+          "tests": 1
+        }
+      ],
+      "chart_patterns": [
+        {
+          "name": "inverse_head_and_shoulders",
+          "neckline": 1.53,
+          "confirmed": false
+        },
+        {
+          "name": "ascending_triangle"
+        }
+      ],
+      "id": "yxx4f84m16",
+      "generated_at": "2026-08-23T19:52:25.869Z",
+      "expires_at": "2026-08-23T20:22:25.869Z",
+      "source": "backend",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 49,
+      "telegram_chat_id": "1820130237"
+    },
+    {
       "coin": "SUI",
       "direction": "short",
       "conviction": "low",
