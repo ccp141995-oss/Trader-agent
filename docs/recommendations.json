@@ -206,7 +206,7 @@
       "generated_at": "2026-08-23T09:59:54.381Z",
       "expires_at": "2026-08-23T12:59:54.381Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 20,
       "telegram_chat_id": "1820130237"
     },
@@ -236,7 +236,7 @@
       "generated_at": "2026-08-23T09:59:54.381Z",
       "expires_at": "2026-08-23T12:59:54.381Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 21,
       "telegram_chat_id": "1820130237"
     },
@@ -266,7 +266,7 @@
       "generated_at": "2026-08-23T09:59:54.381Z",
       "expires_at": "2026-08-23T12:59:54.381Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 22,
       "telegram_chat_id": "1820130237"
     },
@@ -296,7 +296,7 @@
       "generated_at": "2026-08-23T09:02:53.849Z",
       "expires_at": "2026-08-23T12:02:53.849Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 17,
       "telegram_chat_id": "1820130237"
     },
@@ -326,7 +326,7 @@
       "generated_at": "2026-08-23T09:02:53.849Z",
       "expires_at": "2026-08-23T12:02:53.849Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 18,
       "telegram_chat_id": "1820130237"
     },
@@ -357,7 +357,7 @@
       "generated_at": "2026-08-23T09:02:53.849Z",
       "expires_at": "2026-08-23T12:02:53.849Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "telegram_message_id": 19,
       "telegram_chat_id": "1820130237"
     },
