@@ -25,6 +25,9 @@ const INTERVAL_MIN = parseFloat(process.env.AUTO_SCAN_INTERVAL_MIN || '30');
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// Optional — just the public wallet address (same one used for HL_ACCOUNT_ADDRESS in the poller),
+// used only to read equity for a funds-required estimate in the message. Never a private key.
+const HL_ACCOUNT_ADDRESS = process.env.HL_ACCOUNT_ADDRESS || '';
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
 let MAX_STOP_LOSS_PCT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
 let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
@@ -72,6 +75,23 @@ async function infoPost(body){
   });
   if(!res.ok) throw new Error('info ' + body.type + ' HTTP ' + res.status);
   return res.json();
+}
+
+// Same unified-account-aware resolution as the poller: on Hyperliquid's Unified Account mode
+// (default for most users), the perps-specific endpoint can read $0 even with real balance —
+// the real number lives in the spot/unified endpoint instead. This is only used for the
+// funds-required estimate shown in the message; execution always re-checks live equity itself.
+async function loadEstimatedEquity(){
+  if(!HL_ACCOUNT_ADDRESS) return null;
+  try{
+    const [perpState, spotState] = await Promise.all([
+      infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch(() => null),
+      infoPost({ type: 'spotClearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch(() => null)
+    ]);
+    const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
+    const spotUsdc = spotState ? (parseFloat(((spotState.balances || []).find(b => b.coin === 'USDC') || {}).total) || 0) : 0;
+    return perpEquity > 0 ? perpEquity : spotUsdc;
+  }catch(e){ return null; }
 }
 
 async function loadMarketContext(coins){
@@ -368,7 +388,7 @@ function detectPatterns(opens, highs, lows, closes){
 
 const MTF_INTERVALS = ['15m', '1h', '4h'];
 const MTF_MS = { '15m': 15*60000, '1h': 60*60000, '4h': 4*60*60000 };
-const MTF_LOOKBACK_BARS = 120;
+const MTF_LOOKBACK_BARS = 300;
 
 // ---------------- Support / resistance: pivot detection + level clustering with test counts ----------------
 function findPivots(highs, lows, lookback){
@@ -536,14 +556,15 @@ async function loadTimeframeTechnicals(coin, interval){
     const chartPatterns = detectChartPatterns(highs, lows, closes);
     const { resistanceLevels, supportLevels } = findSupportResistance(highs, lows);
     const adx14 = computeADX(highs, lows, closes, 14);
-    const last20 = { opens: opens.slice(-20), highs: highs.slice(-20), lows: lows.slice(-20), closes: closes.slice(-20) };
+    const CHART_CANDLE_COUNT = 250;
+    const chartCandles = { opens: opens.slice(-CHART_CANDLE_COUNT), highs: highs.slice(-CHART_CANDLE_COUNT), lows: lows.slice(-CHART_CANDLE_COUNT), closes: closes.slice(-CHART_CANDLE_COUNT) };
 
     return {
       interval, lastClose: closes[closes.length-1], rsi14, sma20, sma50,
       macd, macdSignal: signal, macdHist: hist, adx14,
       bbUpper, bbMid: sma20, bbLower, volSma20: sma(vols,20), lastVol: vols[vols.length-1],
       patterns, chartPatterns, swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50)),
-      resistanceLevels, supportLevels, recentCandles: last20
+      resistanceLevels, supportLevels, recentCandles: chartCandles
     };
   }catch(e){ console.error('Technicals failed for ' + coin + ' (' + interval + '):', e.message); return null; }
 }
@@ -964,7 +985,7 @@ function buildChartConfig(coin, candles, entry, stop, target){
     options: {
       plugins: {
         legend: { display: false },
-        title: { display: true, text: coin + ' — last 20 x 15m candles', color: '#e8ecef' },
+        title: { display: true, text: coin + ' — last ' + candles.closes.length + ' x 15m candles', color: '#e8ecef' },
         annotation: { annotations }
       },
       scales: {
@@ -981,7 +1002,8 @@ async function fetchChartImageBuffer(config){
     const res = await fetch('https://quickchart.io/chart', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chart: config, width: 600, height: 380, backgroundColor: '#0d1117', version: '3' })
+      // Wider canvas so ~250 candles stay legible instead of compressing into a narrow strip.
+      body: JSON.stringify({ chart: config, width: 1000, height: 450, backgroundColor: '#0d1117', version: '3' })
     });
     if(!res.ok){ console.error('QuickChart render failed: HTTP ' + res.status); return null; }
     const arrBuf = await res.arrayBuffer();
@@ -1077,6 +1099,9 @@ function formatTelegramMessage(rec){
   }
 
   lines.push(`• Size: ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (capped by your limits at execution)`);
+  if(rec.estimated_notional != null && rec.estimated_margin != null){
+    lines.push(`• Est. position value: $${rec.estimated_notional.toFixed(2)} notional — cash required up front: ~$${rec.estimated_margin.toFixed(2)} margin at ${rec.suggested_leverage}x`);
+  }
   if((rec.risk_flags || []).length) lines.push(`• Flags: ${rec.risk_flags.join(', ')}`);
   lines.push('');
   if(rec.auto_trade){
@@ -1210,6 +1235,18 @@ async function main(){
       rec.resistance_levels = (t.resistanceLevels || []).map(l => ({ price: parseFloat(l.price.toFixed(2)), tests: l.tests }));
       rec.support_levels = (t.supportLevels || []).map(l => ({ price: parseFloat(l.price.toFixed(2)), tests: l.tests }));
       rec.chart_patterns = t.chartPatterns || [];
+    }
+  });
+
+  // Funds-required estimate: "X% of equity" is the notional position size, not the cash locked —
+  // actual margin required is notional / leverage, which can be a meaningfully smaller number.
+  // Fetched once per run and estimated here; execution always re-checks live equity itself.
+  const estimatedEquity = await loadEstimatedEquity();
+  newRecs.forEach(rec => {
+    if(estimatedEquity && rec.suggested_size_pct_equity && rec.suggested_leverage){
+      const notional = estimatedEquity * (rec.suggested_size_pct_equity / 100);
+      rec.estimated_notional = notional;
+      rec.estimated_margin = notional / rec.suggested_leverage;
     }
   });
 
