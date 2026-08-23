@@ -591,7 +591,7 @@
         <input type="number" id="confLeverage" step="any">
       </div>
       <div class="field">
-        <label>Est. position value</label>
+        <label>Position value / margin required</label>
         <input type="text" id="confPosValue" disabled>
       </div>
     </div>
@@ -1348,7 +1348,7 @@
 
   const MTF_INTERVALS = ['15m', '1h', '4h'];
   const MTF_MS = { '15m': 15*60000, '1h': 60*60000, '4h': 4*60*60000 };
-  const MTF_LOOKBACK_BARS = 120;
+  const MTF_LOOKBACK_BARS = 300;
 
   function taFindPivots(highs, lows, lookback){
     const pivotHighs = [], pivotLows = [];
@@ -1501,7 +1501,7 @@
       options: {
         plugins: {
           legend: { display: false },
-          title: { display: true, text: coin + ' — last 20 x 15m candles', color: '#e8ecef' },
+          title: { display: true, text: coin + ' — last ' + candles.closes.length + ' x 15m candles', color: '#e8ecef' },
           annotation: { annotations }
         },
         scales: { x: { display: false }, y: { ticks: { color: '#aab' } } }
@@ -1515,7 +1515,7 @@
       const res = await fetch('https://quickchart.io/chart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chart: config, width: 600, height: 380, backgroundColor: '#0d1117', version: '3' })
+        body: JSON.stringify({ chart: config, width: 1000, height: 450, backgroundColor: '#0d1117', version: '3' })
       });
       if(!res.ok) return null;
       const blob = await res.blob();
@@ -1540,7 +1540,8 @@
       const bbLower = (sma20!=null && bbSd!=null) ? sma20 - 2*bbSd : null;
       const { resistanceLevels, supportLevels } = taFindSupportResistance(highs, lows);
       const adx14 = taComputeADX(highs, lows, closes, 14);
-      const recentCandles = { opens: opens.slice(-20), highs: highs.slice(-20), lows: lows.slice(-20), closes: closes.slice(-20) };
+      const CHART_CANDLE_COUNT = 250;
+      const recentCandles = { opens: opens.slice(-CHART_CANDLE_COUNT), highs: highs.slice(-CHART_CANDLE_COUNT), lows: lows.slice(-CHART_CANDLE_COUNT), closes: closes.slice(-CHART_CANDLE_COUNT) };
       return {
         interval, lastClose: closes[closes.length-1], rsi14, sma20, sma50,
         macd, macdSignal: signal, macdHist: hist, adx14,
@@ -2104,6 +2105,13 @@
     }catch(e){ log('Auto-scan signal check failed: ' + e.message, 'err'); }
   }
 
+  function estimateFundsRequired(r){
+    if(!lastAccountValue || !r.suggested_size_pct_equity || !r.suggested_leverage) return null;
+    const notional = lastAccountValue * (r.suggested_size_pct_equity / 100);
+    const margin = notional / r.suggested_leverage;
+    return { notional, margin };
+  }
+
   function renderFullDetailHtml(r){
     const lines = [];
     lines.push('Rationale: ' + (r.rationale || '—'));
@@ -2115,6 +2123,8 @@
     if((r.support_levels || []).length) lines.push('Support: ' + r.support_levels.map(l => '$'+l.price+' ('+l.tests+'x)').join(', '));
     if((r.chart_patterns || []).length) lines.push('Chart patterns: ' + r.chart_patterns.map(cp => cp.name + (cp.neckline ? ' (neckline $'+cp.neckline+(cp.confirmed?', confirmed':'')+')' : '')).join(', '));
     lines.push('Entry $'+fmtNum(r.entry_price,2)+' · Stop $'+fmtNum(r.stop_loss_price,2)+(r.take_profit_price?' · Target $'+fmtNum(r.take_profit_price,2):''));
+    const est = estimateFundsRequired(r);
+    if(est) lines.push('Est. position value: $'+est.notional.toFixed(2)+' notional — cash required up front: ~$'+est.margin.toFixed(2)+' margin at '+r.suggested_leverage+'x');
     if(r.risk_flags && r.risk_flags.length) lines.push('Risk flags: ' + r.risk_flags.join(', '));
     return '<div style="font-size:11.5px;line-height:1.7;color:var(--text);white-space:pre-line;">' + lines.join('\n') + '</div>';
   }
@@ -2154,11 +2164,14 @@
       const confluenceTag = r.confluence_score != null ? '<span class="conviction low" style="margin-left:4px;">'+r.confluence_score+'/8 factors</span>' : '';
       const consistencyTag = r.self_consistent ? '<span class="conviction high" style="margin-left:4px;">verified 2x</span>' : '';
       const autoTag = r.auto_trade ? '<span class="conviction medium" style="margin-left:4px;">⚡ auto-trade</span>' : '';
+      const est = estimateFundsRequired(r);
+      const fundsLine = est ? '<div class="rec-horizon">Cash required: ~$'+est.margin.toFixed(2)+' margin ($'+est.notional.toFixed(2)+' notional)</div>' : '';
       return '<div class="rec-card">'
         + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
         + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+confluenceTag+consistencyTag+autoTag+sourceTag+statusBadge+'</span></div>'
         + '<div class="rec-catalyst"><b>'+(r.pattern||'Pattern n/a')+'</b>'+((r.indicators_confirming&&r.indicators_confirming.length)?' — '+r.indicators_confirming.join(', '):'')+'</div>'
         + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+'</div>'
+        + fundsLine
         + actions
         + '<div id="rec-detail-'+i+'" style="display:none;margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px;"></div>'
         + '</div>';
@@ -2331,7 +2344,7 @@
     const equity = lastAccountValue || 0;
     const pctOfEquity = equity ? (notional / equity * 100) : 0;
 
-    document.getElementById('confPosValue').value = fmtUsd(notional) + (equity ? ' ('+pctOfEquity.toFixed(1)+'% of equity)' : '');
+    document.getElementById('confPosValue').value = fmtUsd(notional) + (equity ? ' ('+pctOfEquity.toFixed(1)+'% of equity)' : '') + (leverage ? ' · margin ~'+fmtUsd(notional/leverage) : '');
 
     const problems = [];
     if(!stopLoss) problems.push('Stop-loss is required.');
