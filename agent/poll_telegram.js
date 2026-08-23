@@ -99,6 +99,10 @@ async function getAccountEquity(){
 
 async function getAccountSnapshot(){
   if(!HL_ACCOUNT_ADDRESS) return 'Account address not configured.';
+  const addrShort = HL_ACCOUNT_ADDRESS.length > 12
+    ? HL_ACCOUNT_ADDRESS.slice(0,6) + '…' + HL_ACCOUNT_ADDRESS.slice(-4)
+    : HL_ACCOUNT_ADDRESS;
+  const queried = `(queried ${HL_EXEC_NETWORK}: ${addrShort})`;
   try{
     const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
     const ms = state.marginSummary || {};
@@ -106,12 +110,16 @@ async function getAccountSnapshot(){
     const accountValue = parseFloat(ms.accountValue);
     const marginUsed = parseFloat(ms.totalMarginUsed);
     const withdrawable = parseFloat(state.withdrawable);
-    return `Account value $${isFinite(accountValue)?accountValue.toFixed(2):'n/a'}, `
+    let line = `Account value $${isFinite(accountValue)?accountValue.toFixed(2):'n/a'}, `
       + `margin used $${isFinite(marginUsed)?marginUsed.toFixed(2):'n/a'}, `
-      + `withdrawable $${isFinite(withdrawable)?withdrawable.toFixed(2):'n/a'}, `
-      + `${openPositions} open position(s)`;
+      + `investable balance $${isFinite(withdrawable)?withdrawable.toFixed(2):'n/a'} (uncommitted funds available for new trades), `
+      + `${openPositions} open position(s) ${queried}`;
+    if(!accountValue){
+      line += `\nIf this looks wrong: check that HL_EXEC_NETWORK in GitHub Variables matches the network your funds are actually on, and that HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.`;
+    }
+    return line;
   }catch(e){
-    return 'Could not fetch account stats: ' + e.message;
+    return 'Could not fetch account stats: ' + e.message + ' ' + queried;
   }
 }
 
@@ -156,7 +164,10 @@ async function executeTrade(rec){
   }
 
   const equity = await getAccountEquity();
-  if(!equity) throw new Error('Could not read account equity to size the trade');
+  if(!equity){
+    const addrShort = HL_ACCOUNT_ADDRESS ? HL_ACCOUNT_ADDRESS.slice(0,6) + '…' + HL_ACCOUNT_ADDRESS.slice(-4) : '(not set)';
+    throw new Error(`Account equity read as $0 on ${HL_EXEC_NETWORK} for ${addrShort} — check HL_EXEC_NETWORK matches the network your funds are on, and that HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.`);
+  }
 
   const pctEquity = Math.min(rec.suggested_size_pct_equity || MAX_POSITION_PCT, MAX_POSITION_PCT);
   const leverage = Math.min(rec.suggested_leverage || 1, MAX_LEVERAGE);

@@ -181,11 +181,51 @@ function detectPatterns(opens, highs, lows, closes){
   return patterns;
 }
 
-async function loadTechnicals(coin){
+const MTF_INTERVALS = ['15m', '1h', '4h'];
+const MTF_MS = { '15m': 15*60000, '1h': 60*60000, '4h': 4*60*60000 };
+const MTF_LOOKBACK_BARS = 120;
+
+// ---------------- Support / resistance: pivot detection + level clustering with test counts ----------------
+function findPivots(highs, lows, lookback){
+  const pivotHighs = [], pivotLows = [];
+  for(let i = lookback; i < highs.length - lookback; i++){
+    const windowH = highs.slice(i-lookback, i+lookback+1);
+    if(highs[i] === Math.max(...windowH)) pivotHighs.push({ idx: i, price: highs[i] });
+    const windowL = lows.slice(i-lookback, i+lookback+1);
+    if(lows[i] === Math.min(...windowL)) pivotLows.push({ idx: i, price: lows[i] });
+  }
+  return { pivotHighs, pivotLows };
+}
+
+function clusterLevels(pivots, tolerancePct){
+  const clusters = [];
+  [...pivots].sort((a,b) => a.price - b.price).forEach(p => {
+    const found = clusters.find(c => Math.abs(c.price - p.price) / p.price * 100 <= tolerancePct);
+    if(found){
+      found.price = (found.price * found.tests + p.price) / (found.tests + 1);
+      found.tests += 1;
+      found.lastIdx = Math.max(found.lastIdx, p.idx);
+    } else {
+      clusters.push({ price: p.price, tests: 1, lastIdx: p.idx });
+    }
+  });
+  return clusters.sort((a,b) => b.tests - a.tests);
+}
+
+function findSupportResistance(highs, lows){
+  const { pivotHighs, pivotLows } = findPivots(highs, lows, 3);
+  return {
+    resistanceLevels: clusterLevels(pivotHighs, 0.5).slice(0, 3),
+    supportLevels: clusterLevels(pivotLows, 0.5).slice(0, 3)
+  };
+}
+
+// ---------------- Per-timeframe technicals ----------------
+async function loadTimeframeTechnicals(coin, interval){
   try{
     const endTime = Date.now();
-    const startTime = endTime - 15*60000*120; // ~120 x 15m candles, ~30h lookback
-    const candles = await infoPost({ type:'candleSnapshot', req:{ coin, interval:'15m', startTime, endTime } });
+    const startTime = endTime - MTF_MS[interval] * MTF_LOOKBACK_BARS;
+    const candles = await infoPost({ type:'candleSnapshot', req:{ coin, interval, startTime, endTime } });
     if(!candles || candles.length < 30) return null;
     const opens = candles.map(c=>parseFloat(c.o));
     const highs = candles.map(c=>parseFloat(c.h));
@@ -197,35 +237,68 @@ async function loadTechnicals(coin){
     const sma20 = sma(closes, 20);
     const sma50 = sma(closes, 50);
     const { macd, signal, hist } = macdCalc(closes);
-    const bbMid = sma20;
     const bbSd = stddev(closes, 20);
-    const bbUpper = (bbMid!=null && bbSd!=null) ? bbMid + 2*bbSd : null;
-    const bbLower = (bbMid!=null && bbSd!=null) ? bbMid - 2*bbSd : null;
-    const volSma20 = sma(vols, 20);
-    const lastVol = vols[vols.length-1];
+    const bbUpper = (sma20!=null && bbSd!=null) ? sma20 + 2*bbSd : null;
+    const bbLower = (sma20!=null && bbSd!=null) ? sma20 - 2*bbSd : null;
     const patterns = detectPatterns(opens, highs, lows, closes);
-    const swingHigh = Math.max(...highs.slice(-50));
-    const swingLow = Math.min(...lows.slice(-50));
+    const { resistanceLevels, supportLevels } = findSupportResistance(highs, lows);
 
     return {
-      lastClose: closes[closes.length-1], rsi14, sma20, sma50,
+      interval, lastClose: closes[closes.length-1], rsi14, sma20, sma50,
       macd, macdSignal: signal, macdHist: hist,
-      bbUpper, bbMid, bbLower, volSma20, lastVol, patterns, swingHigh, swingLow
+      bbUpper, bbMid: sma20, bbLower, volSma20: sma(vols,20), lastVol: vols[vols.length-1],
+      patterns, swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50)),
+      resistanceLevels, supportLevels
     };
-  }catch(e){ console.error('Technicals failed for ' + coin + ':', e.message); return null; }
+  }catch(e){ console.error('Technicals failed for ' + coin + ' (' + interval + '):', e.message); return null; }
 }
 
-function formatTechnicalLine(coin, t){
-  if(!t) return coin + ': technical data unavailable';
+async function loadMultiTimeframeTechnicals(coin){
+  const out = {};
+  for(const iv of MTF_INTERVALS){ out[iv] = await loadTimeframeTechnicals(coin, iv); }
+  return out;
+}
+
+function timeframeBias(t){
+  if(!t) return 'neutral';
+  let bull = 0, bear = 0;
+  if(t.sma20 != null){ if(t.lastClose > t.sma20) bull++; else bear++; }
+  if(t.macdHist != null){ if(t.macdHist > 0) bull++; else bear++; }
+  if(t.rsi14 != null){ if(t.rsi14 > 50) bull++; else bear++; }
+  if(bull > bear) return 'long';
+  if(bear > bull) return 'short';
+  return 'neutral';
+}
+
+function computeAlignment(mtf){
+  const biases = MTF_INTERVALS.map(iv => timeframeBias(mtf[iv]));
+  const longCount = biases.filter(b => b === 'long').length;
+  const shortCount = biases.filter(b => b === 'short').length;
+  const total = MTF_INTERVALS.length;
+  const needed = Math.ceil(total * 2 / 3);
+  if(longCount >= needed) return { direction: 'long', agree: longCount, total };
+  if(shortCount >= needed) return { direction: 'short', agree: shortCount, total };
+  return { direction: null, agree: Math.max(longCount, shortCount), total };
+}
+
+function formatMultiTimeframeBlock(coin, mtf, alignment){
   const fmt = (v,d) => v==null ? 'n/a' : v.toFixed(d);
-  return coin + ': price $'+fmt(t.lastClose,2)+', RSI14 '+fmt(t.rsi14,1)
-    + ', SMA20 $'+fmt(t.sma20,2)+' / SMA50 $'+fmt(t.sma50,2)
-    + ', MACD '+fmt(t.macd,4)+' vs signal '+fmt(t.macdSignal,4)+' (hist '+fmt(t.macdHist,4)+')'
-    + ', Bollinger $'+fmt(t.bbLower,2)+'–$'+fmt(t.bbUpper,2)+' (mid $'+fmt(t.bbMid,2)+')'
-    + ', volume '+fmt(t.lastVol,0)+' vs 20-bar avg '+fmt(t.volSma20,0)
-    + ', 50-bar range $'+fmt(t.swingLow,2)+'–$'+fmt(t.swingHigh,2)
-    + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none detected')
-    + ' (15m candles)';
+  const lines = MTF_INTERVALS.map(iv => {
+    const t = mtf[iv];
+    if(!t) return '  ' + iv + ': data unavailable';
+    const res = t.resistanceLevels.length ? t.resistanceLevels.map(l => '$'+l.price.toFixed(2)+' ('+l.tests+'x tested)').join(', ') : 'none found';
+    const sup = t.supportLevels.length ? t.supportLevels.map(l => '$'+l.price.toFixed(2)+' ('+l.tests+'x tested)').join(', ') : 'none found';
+    return '  ' + iv + ': price $'+fmt(t.lastClose,2)+', RSI14 '+fmt(t.rsi14,1)
+      + ', SMA20 $'+fmt(t.sma20,2)+'/SMA50 $'+fmt(t.sma50,2)
+      + ', MACD hist '+fmt(t.macdHist,4)
+      + ', Bollinger $'+fmt(t.bbLower,2)+'-$'+fmt(t.bbUpper,2)
+      + ', patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none')
+      + ', resistance: '+res+', support: '+sup;
+  }).join('\n');
+  const alignLine = alignment.direction
+    ? '  Multi-timeframe bias: ' + alignment.direction.toUpperCase() + ' (' + alignment.agree + '/' + alignment.total + ' timeframes agree)'
+    : '  Multi-timeframe bias: NO CLEAR ALIGNMENT (' + alignment.agree + '/' + alignment.total + ' agree at most)';
+  return coin + ':\n' + lines + '\n' + alignLine;
 }
 
 async function loadOrderBookSignal(coin){
@@ -272,8 +345,8 @@ function findTrippedCoins(signals){
   return Object.values(signals).filter(s => s.volRatio >= t.volRatio || Math.abs(s.imbalance) >= t.imbalance).map(s => s.coin);
 }
 
-function buildAgentPrompt(signals, technicals){
-  const techTable = Object.keys(technicals).map(coin => formatTechnicalLine(coin, technicals[coin])).join('\n');
+function buildAgentPrompt(signals, mtfData, alignments){
+  const techTable = Object.keys(mtfData).map(coin => formatMultiTimeframeBlock(coin, mtfData[coin], alignments[coin])).join('\n\n');
   const rows = Object.values(signals);
   const supportTable = rows.map(r =>
     r.coin+': funding '+(r.funding*100).toFixed(4)+'%/8h, OI '+Math.round(r.openInterest)+', '
@@ -283,16 +356,17 @@ function buildAgentPrompt(signals, technicals){
   ).join('\n');
 
   const system = "You are JARVIS's trading research sub-agent for a Hyperliquid perpetuals account, acting as a master chart technician. "
-    + "Your PRIMARY basis for every recommendation must be technical analysis: candlestick chart patterns, confirmed by volume, and agreement from "
-    + "popular indicators (RSI, MACD, Bollinger Bands, moving averages) — all computed for you below from real 15-minute candle data. Only recommend "
-    + "a trade when the technical picture is genuinely compelling: a real pattern, confirmed by volume, with at least one indicator in agreement — "
-    + "not a single signal in isolation, and never a trade with no identifiable pattern or indicator confluence. "
+    + "Every coin below has ALREADY been confirmed to have multi-timeframe alignment (agreement across 15m/1h/4h) before reaching you — respect that "
+    + "established direction; don't recommend the opposite direction from what's aligned unless the evidence is overwhelming and you say so explicitly. "
+    + "Your PRIMARY basis for every recommendation must be technical analysis: candlestick chart patterns, confirmed by volume, agreement from popular "
+    + "indicators (RSI, MACD, Bollinger Bands, moving averages) across timeframes, and support/resistance levels — including how many times each level "
+    + "has been tested (more tests generally means a more significant level). Only recommend a trade when the technical picture is genuinely compelling. "
     + "After forming your technical view, do ONE quick supplementary web search per candidate for sentiment and social buzz (X/Twitter, Reddit, "
     + "crypto forums) and recent news — use this only to confirm or flag a conflict with the technical picture, never as the primary reason for a trade. "
     + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
     + "You NEVER place trades yourself; you only propose them for human review. "
     + "Return at most 3 ideas — only ones with genuine technical conviction; return fewer or none if nothing qualifies. "
-    + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing), "
+    + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond a tested support/resistance level or recent swing), "
     + "and ideally within about " + MAX_STOP_LOSS_PCT + "% of entry — trades needing a wider stop than that to make sense are usually not a fit here. "
     + "Be concise: rationale <= 35 words, sentiment_note <= 20 words. "
     + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
@@ -301,7 +375,7 @@ function buildAgentPrompt(signals, technicals){
     + '"entry_price":number,"stop_loss_price":number,"take_profit_price":number|null,'
     + '"suggested_size_pct_equity":number,"suggested_leverage":number,"risk_flags":[string]}]}';
 
-  const user = "Technical readout (primary evidence):\n" + techTable
+  const user = "Multi-timeframe technical readout, including support/resistance levels and how many times each has been tested (primary evidence):\n\n" + techTable
     + "\n\nSupporting market data (funding/OI/book/volume):\n" + supportTable
     + "\n\nFind the best technically-confirmed, quick-turnaround opportunities right now among these coins (or state none if the technical picture isn't compelling for any of them).";
   return { system, user };
@@ -528,16 +602,34 @@ async function main(){
     return;
   }
   console.log('Signal tripped on: ' + tripped.join(', '));
-  const scanCoins = tripped;
+
+  console.log('Checking multi-timeframe alignment (15m/1h/4h) for: ' + tripped.join(', '));
+  const mtfData = {};
+  const alignments = {};
+  for(const c of tripped){
+    mtfData[c] = await loadMultiTimeframeTechnicals(c);
+    alignments[c] = computeAlignment(mtfData[c]);
+    console.log(`  ${c}: ${alignments[c].direction ? alignments[c].direction.toUpperCase() : 'no alignment'} (${alignments[c].agree}/${alignments[c].total} timeframes agree)`);
+  }
+  const scanCoins = tripped.filter(c => alignments[c].direction !== null);
+
+  if(!scanCoins.length){
+    console.log('No coin reached multi-timeframe alignment (need at least 2/3 of 15m/1h/4h agreeing). Not calling Anthropic — nothing to do this run.');
+    return;
+  }
 
   const subsetSignals = {};
   scanCoins.forEach(c => { if(signals[c]) subsetSignals[c] = signals[c]; });
+  const subsetMtf = {};
+  const subsetAlignments = {};
+  scanCoins.forEach(c => { subsetMtf[c] = mtfData[c]; subsetAlignments[c] = alignments[c]; });
 
-  console.log('Computing technical readout (candlestick patterns, RSI, MACD, Bollinger, volume) for: ' + scanCoins.join(', '));
+  // The 15m timeframe stays the reference for stop/target math — appropriate near-term structure
+  // for the quick-turnaround horizon this agent operates on.
   const technicals = {};
-  for(const c of scanCoins){ technicals[c] = await loadTechnicals(c); }
+  scanCoins.forEach(c => { technicals[c] = mtfData[c]['15m']; });
 
-  const { system, user } = buildAgentPrompt(subsetSignals, technicals);
+  const { system, user } = buildAgentPrompt(subsetSignals, subsetMtf, subsetAlignments);
 
   console.log('Calling Anthropic for research on: ' + scanCoins.join(', '));
   let newRecs;
