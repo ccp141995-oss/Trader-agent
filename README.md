@@ -71,10 +71,13 @@ Not secret, just config — you can change these anytime without touching code.
 | `FILTERED_MIN_VOLUME_24H` | `2000000` | Only used in filtered mode — minimum 24h volume (USD) to be eligible |
 | `HL_NETWORK` | `mainnet` | Signal data should come from mainnet even if you execute on testnet — testnet volume isn't real |
 | `HL_EXEC_NETWORK` | `testnet` | **Where trades actually execute.** Change to `mainnet` only when you're ready to risk real funds |
-| `AUTO_SCAN_INTERVAL_MIN` | `30` | Minimum minutes between research scans — a cooldown floor, not a schedule. If nothing trips a signal, no scan happens at all, no matter how much time passes |
+| `AUTO_SCAN_INTERVAL_MIN` | `30` | Minimum minutes between *Anthropic calls specifically* — technical checks always run regardless of this. Only matters if `AI_RESEARCH_ENABLED` is `true` |
+| `AI_RESEARCH_ENABLED` | `true` | `true` or `false`. Off = technicals-only forever, no Anthropic key needed, no cooldown applies |
 | `SIGNAL_SENSITIVITY` | `medium` | `low` / `medium` / `high` — how easily a volume spike or book imbalance triggers a scan |
 | `MAX_POSITION_PCT` | `5` | Hard cap on position size as % of equity — should match your dashboard setting |
 | `MAX_LEVERAGE` | `3` | Hard cap on leverage — should match your dashboard setting |
+| `MAX_STOP_LOSS_PCT` | `5` | Hard cap on how far a stop-loss can sit from entry (%) — rejects execution if the AI's (or your manually-entered) stop is wider than this |
+| `DEFAULT_TAKE_PROFIT_PCT` | `3` | Used to fill in a take-profit whenever one is left blank |
 | `EXECUTION_WINDOW_MIN` | `180` | How long a recommendation stays confirmable before it expires |
 
 ## 6. Run it
@@ -118,9 +121,73 @@ This token can only edit files in this repo — it can't touch other repos, your
 
 The agent's primary evidence is technical: for every coin it researches, it pulls ~120 recent 15-minute candles and computes RSI(14), SMA(20/50), MACD, Bollinger Bands, volume vs. its 20-bar average, and checks for a handful of classic candlestick patterns (bullish/bearish engulfing, hammer, shooting star, doji) — all done in plain JS, not left to the model to eyeball. Only when that technical picture is genuinely compelling (a real pattern, confirmed by volume, with at least one indicator agreeing) does it do a quick supplementary web search for sentiment/news — used only to confirm or flag a conflict, never as the primary reason for a trade. Every recommendation now carries `pattern`, `indicators_confirming`, and a short `sentiment_note` instead of the old catalyst-first framing.
 
-## Pausing
+## AI research toggle and cooldown architecture
 
-The Agent tab has a **Pause auto-scan** button. Toggling it stops the dashboard's own in-browser auto-scan immediately, and — if you've set up GitHub sync (below) — publishes the paused state to `docs/agent-config.json`, so the backend scanner skips its scheduled runs too until you resume. Manual "Scan for opportunities" and the Telegram poller (for already-pending recommendations) both keep working while paused; pausing only stops *new* automatic scans from firing.
+Technical checks — order-book imbalance, volume spikes, multi-timeframe (15m/1h/4h) alignment, support/resistance — now run **every scheduled cycle, unconditionally**. None of that is gated by any cooldown; it's free, so it always runs.
+
+What *is* gated is the Anthropic call specifically, by two independent things:
+
+1. **The AI research toggle** (Settings → "Enable AI research", or `AI_RESEARCH_ENABLED` as a GitHub Variable). Off means the pipeline never calls Anthropic at all — every aligned setup goes straight to the rules-based technicals-only engine (requires 2+ of: candlestick pattern, MACD direction, RSI extreme, Bollinger Band edge, all agreeing). No Anthropic key is even required in this mode.
+2. **`AUTO_SCAN_INTERVAL_MIN`**, which — when the toggle is on — throttles how often the *paid* call can fire. If a new aligned setup shows up before that many minutes have passed since the last AI call, you get a technicals-only idea instead of waiting; nothing is ever blocked or delayed, it just falls back.
+
+This means you can run entirely on technicals (toggle off) with zero API cost and no artificial delay between ideas, or run with AI on and let the cooldown control spend — your choice, and it's a single checkbox to switch between them.
+
+A duplicate-recommendation guard was added alongside this: if a coin already has a pending (unconfirmed) recommendation outstanding, a new cycle won't propose another one for that same coin until the existing one is confirmed, denied, or expires. This matters more now that technicals checks run on every cycle rather than being spaced out by a cooldown.
+
+## Resilience and risk-level logic
+
+- **If Anthropic is unreachable** (out of credits, rate-limited, network hiccup), the scanner doesn't just fail silently — it falls back to a rules-based technicals-only signal (requiring at least 2 of: a candlestick pattern, MACD histogram direction, RSI extreme, or price at a Bollinger Band edge, all agreeing). These are marked `technicals only` in the dashboard and flagged clearly in Telegram, sized conservatively (half your normal max position %, 1x leverage), since there's no sentiment/news confirmation behind them.
+- **Every recommendation's stop-loss and take-profit are independently resolved**, not just trusted as given: if the AI's stop is within your max stop-loss distance, it's used as-is; if it's missing or too wide, a technically-grounded stop (just beyond the recent swing high/low) is calculated instead; only if neither is available does it fall back to a flat % from your settings. Take-profit follows the same priority — AI value, then a 1.5x risk:reward target off the resolved stop, then the flat default % as a last resort. The settings values are genuinely a safety net here, not the primary driver.
+
+## If balances show $0.00 but you have funds
+
+This is almost always one of two things, not a dashboard bug:
+
+1. **Spot vs. Perps.** Hyperliquid keeps these separate. Testnet faucet USDC (or a deposit) can land in your Spot balance without automatically funding your Perps account — and only Perps equity shows here, since that's what trading actually uses. The Balances tab now detects this directly: if Perps shows $0 but Spot has funds, it tells you so and to transfer Spot → Perps in the Hyperliquid app.
+2. **Wrong address or network.** The Balances tab also shows exactly which address and network (testnet/mainnet) it's querying — worth a quick visual double-check against where you actually deposited.
+
+## Portfolio chart
+
+A **Market / Portfolio** toggle sits above the main chart. Portfolio mode pulls your account's real value history from Hyperliquid (`day` / `week` / `month` / `all` periods) and buckets it into OHLC candles so it renders in the same candlestick view — open/close are the first/last value in each bucket, high/low are the bucket's extremes. It's a real equity curve, just expressed as candles instead of a line.
+
+## Emergency exit
+
+The Positions tab has a **🚨 Emergency Exit — Close All Positions** button, visible whenever you have open positions. It asks for a native confirm (listing exactly what it's about to close) before firing reduce-only market orders to flatten every open position at once. It reuses the same per-position close logic as the individual "Close position" buttons, just applied to everything at once — one failure won't stop it from attempting the rest.
+
+## Multi-timeframe confirmation
+
+Before a coin ever reaches Claude, it now has to clear a second, still-free gate on top of the volume/imbalance trigger: technicals are computed across **15m, 1h, and 4h** candles independently, each timeframe gets a simple directional bias (price vs. SMA20, MACD histogram sign, RSI above/below 50 — majority wins), and at least **2 of the 3 timeframes must agree** on direction before any Anthropic call happens. A coin with a volume spike but no cross-timeframe agreement gets skipped entirely — logged, no API cost. This applies to both the backend scanner and the dashboard's manual/auto scan.
+
+Each timeframe also gets its own **support/resistance analysis**: local pivot highs/lows are detected and clustered into levels (nearby pivots within 0.5% are treated as the same level), and each level's **test count** — how many times price has approached it — is reported. More tests generally means a more significant level. These levels, with their test counts, are fed directly into the prompt so the AI's stop-loss and take-profit reasoning can reference real, quantified structure instead of guessing.
+
+## Configurable risk variables (GitHub Variables)
+
+For quick reference, the ones controlling take-profit and stop-loss specifically:
+
+- **`DEFAULT_TAKE_PROFIT_PCT`** — the flat fallback take-profit percentage, only used when no AI value and no valid technical (1.5x risk:reward) target are available. This is the one to change if you want to adjust the safety-net take-profit.
+- **`MAX_STOP_LOSS_PCT`** — the hard cap on stop-loss distance from entry; also used as the AI's suggested budget and the fallback stop distance when no technical swing level is available.
+- The 1.5x risk:reward multiple used for the *primary* technically-driven take-profit target is currently hardcoded in `resolveRiskLevels()` in both `scan.js` and the dashboard, not a separate GitHub variable — ask if you'd like that exposed too.
+
+## Telegram/agent reliability
+
+A real bug got fixed here: Telegram messages were sent with `parse_mode: Markdown`, which silently fails to send or edit if the text (AI-generated rationale, or an error message) contains a stray `*`, `_`, or `` ` ``. Combined with failures only being logged to GitHub's console (never back to you), a tap on Confirm could look like it did nothing even when something real happened or failed behind the scenes. Fixed properly, not worked around:
+
+- All Telegram messages are now plain text — no more silent parse failures.
+- Confirming now gets an **immediate acknowledgment** ("checking price and risk limits…") before execution even starts, so a tap always visibly registers right away.
+- If editing the original message ever fails for any reason, it falls back to sending a **brand new message** instead of going silent.
+- Every outcome — executed, denied, expired, or failed — now includes **real per-order fill status** (filled/resting/error, parsed straight from Hyperliquid's response) and a **live account snapshot** (value, margin used, withdrawable, open position count), not just a generic "done."
+- A top-level safety net around the whole callback handler means any unexpected error still reaches you as a Telegram message, with a pointer to check the workflow's logs — nothing fails purely into a GitHub Actions log you'd never think to open.
+- The dashboard's own confirm flow got the same fill-status and account-snapshot treatment for consistency.
+
+## Workflow failure alerts
+
+Both workflows now send you a Telegram message if the whole run fails — not just failures inside the script, but broken dependency installs, expired secrets, or all 5 git-push retries failing. If Telegram suddenly "stops responding," check for one of these alerts first; if you got one, the Actions tab has the actual logs. If you didn't get one, the workflow itself is running fine and the issue is more likely upstream (Telegram API, bot token, or your own connectivity).
+
+## Dashboard UI additions
+
+- **USDC balance** now shows prominently in the header, next to the connection badge — no need to open the Balances tab just to check your account value at a glance.
+- **Activity log** can now go full-screen via the "⛶ Expand" button in its header bar (there's also a "Clear" button). Useful when debugging — the log is otherwise capped at a small scroll box.
+- **Telegram order responses and the dashboard's own confirm flow** now both report your **investable balance** (uncommitted funds available for new trades — Hyperliquid calls this "withdrawable") alongside account value and margin used, so you always know how much headroom you have left after a trade executes or fails.
 
 ## Security summary
 
