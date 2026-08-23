@@ -50,6 +50,26 @@ jobs:
           git config user.name "jarvis-trade-agent"
           git config user.email "actions@github.com"
           git add docs/recommendations.json agent/telegram_offset.json
-          git diff --cached --quiet || git commit -m "Telegram poll update"
-          git pull --rebase
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Telegram poll update"
+          for i in 1 2 3 4 5; do
+            if git pull --rebase && git push; then
+              echo "Pushed on attempt $i."
+              exit 0
+            fi
+            echo "Push attempt $i failed (likely racing with the scanner workflow) — retrying..."
+            sleep $(( (RANDOM % 5) + 3 ))
+          done
+          echo "Could not push after 5 attempts. Nothing further to do this run; the next scheduled run will pick up from here."
+          exit 1
+
+      - name: Notify on workflow failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\": \"${{ secrets.TELEGRAM_CHAT_ID }}\", \"text\": \"⚠ Trade Agent Telegram Poller workflow failed on GitHub Actions (run ${{ github.run_id }}). This is likely why button taps stopped getting a response — check the Actions tab for logs.\"}" \
+            || echo "Could not send failure notification (bad token/chat id, or Telegram unreachable)."

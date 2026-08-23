@@ -48,6 +48,26 @@ jobs:
           git config user.name "jarvis-trade-agent"
           git config user.email "actions@github.com"
           git add agent/state.json docs/recommendations.json
-          git diff --cached --quiet || git commit -m "Trade agent scan update"
-          git pull --rebase
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Trade agent scan update"
+          for i in 1 2 3 4 5; do
+            if git pull --rebase && git push; then
+              echo "Pushed on attempt $i."
+              exit 0
+            fi
+            echo "Push attempt $i failed (likely racing with the Telegram poller workflow) — retrying..."
+            sleep $(( (RANDOM % 5) + 3 ))
+          done
+          echo "Could not push after 5 attempts. The recommendation was already sent to Telegram if applicable; only the repo commit is delayed to the next run."
+          exit 1
+
+      - name: Notify on workflow failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\": \"${{ secrets.TELEGRAM_CHAT_ID }}\", \"text\": \"⚠ Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs — nothing was silently lost, but this run did not complete.\"}" \
+            || echo "Could not send failure notification (bad token/chat id, or Telegram unreachable)."
