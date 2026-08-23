@@ -168,10 +168,11 @@
       "generated_at": "2026-08-23T19:52:25.869Z",
       "expires_at": "2026-08-23T20:22:25.869Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": false,
       "telegram_message_id": 48,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Account equity read as $0 on testnet for 0xCB76…b4c2 — check HL_EXEC_NETWORK matches the network your funds are on, and that HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet."
     },
     {
       "coin": "GRAM",
