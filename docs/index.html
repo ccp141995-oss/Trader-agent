@@ -46,6 +46,9 @@
   .top-actions{display:flex;align-items:center;gap:8px;}
   .acct-summary{display:flex;gap:18px;font-size:12px;color:var(--muted);}
   .acct-summary b{color:var(--text);font-weight:600;}
+  .usdc-balance-chip{display:flex;flex-direction:column;align-items:flex-start;padding:4px 14px;border-left:1px solid var(--line);border-right:1px solid var(--line);}
+  .usdc-balance-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+  .usdc-balance-value{font-family:'IBM Plex Mono',monospace;font-size:17px;font-weight:700;color:var(--mint);}
   .icon-btn{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer;font-family:'Inter';}
   .icon-btn:hover{color:var(--text);border-color:var(--muted-2);}
 
@@ -119,7 +122,30 @@
   .bal-line{display:flex;justify-content:space-between;padding:9px 2px;border-bottom:1px solid var(--line-soft);font-size:12.5px;}
   .bal-line span:last-child{font-family:'IBM Plex Mono';font-weight:600;}
 
-  .log{border-top:1px solid var(--line);max-height:130px;overflow-y:auto;padding:8px 10px;font-size:10.5px;}
+  .log{max-height:130px;overflow-y:auto;padding:8px 10px;font-size:10.5px;position:relative;}
+  .log-header{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-top:1px solid var(--line);font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+  .log-header-actions{display:flex;gap:6px;}
+  .log-btn{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer;}
+  .log-btn:hover{color:var(--text);border-color:var(--muted-2);}
+  .log-container.fullscreen{position:fixed;inset:0;z-index:300;background:var(--bg);display:flex;flex-direction:column;}
+  .log-container.fullscreen .log{flex:1;max-height:none;font-size:13px;padding:16px;}
+  .log-container.fullscreen .log-line{margin-bottom:6px;white-space:pre-wrap;}
+  .log-header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px 0;border-top:1px solid var(--line);}
+  .log-header span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+  .log-header button{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11px;}
+  .log-header button:hover{color:var(--text);border-color:var(--muted-2);}
+  .log.fullscreen{position:fixed;inset:0;z-index:200;max-height:100vh;background:var(--bg);padding:24px;font-size:13px;line-height:1.7;border-top:none;}
+  .log.fullscreen .log-line{margin-bottom:6px;white-space:pre-wrap;}
+  .log-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+  .log-header span{font-size:9.5px;color:var(--muted-2);text-transform:uppercase;letter-spacing:.05em;}
+  .log-expand-btn{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;}
+  .log-expand-btn:hover{color:var(--text);border-color:var(--muted-2);}
+  .log.fullscreen{
+    position:fixed; inset:0; z-index:100; max-height:100vh; height:100vh;
+    background:var(--bg); padding:16px 18px; border-top:none;
+  }
+  .log.fullscreen .log-line{font-size:13px;margin-bottom:6px;white-space:pre-wrap;}
+  .log.fullscreen .log-header span{font-size:12px;}
   .log-line{color:var(--muted);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .log-line.err{color:var(--red);}
   .log-line.ok{color:var(--mint);}
@@ -221,8 +247,11 @@
       <div class="brand-title">Terminal</div>
       <div class="badge" id="netBadge">Disconnected</div>
     </div>
+    <div class="usdc-balance-chip" id="usdcBalanceChip" style="display:none;">
+      <span class="usdc-balance-label">USDC Balance</span>
+      <span class="usdc-balance-value" id="usdcBalanceValue">—</span>
+    </div>
     <div class="acct-summary" id="acctSummary" style="display:none;">
-      <div>Account Value <b id="sAccountValue">—</b></div>
       <div>Withdrawable <b id="sWithdrawable">—</b></div>
       <div>Margin Used <b id="sMarginUsed">—</b></div>
     </div>
@@ -333,7 +362,20 @@
         <div class="agent-disclaimer">Research and sizing are AI-generated, not financial advice. Every trade requires your explicit confirmation and is capped by the risk rules in Settings.</div>
       </div>
     </div>
-    <div class="log" id="logBox"></div>
+    <div class="log-header">
+      <span>Activity Log</span>
+      <button id="logFullscreenBtn" title="Expand log">⛶ Expand</button>
+    </div>
+    <div class="log-container" id="logContainer">
+      <div class="log-header">
+        <span>Activity Log</span>
+        <div class="log-header-actions">
+          <button class="log-btn" id="clearLogBtn">Clear</button>
+          <button class="log-btn" id="expandLogBtn">⛶ Expand</button>
+        </div>
+      </div>
+      <div class="log" id="logBox"></div>
+    </div>
   </div>
 </div>
 
@@ -591,6 +633,7 @@
   let pollTimers = [];
   let recommendations = [];
   let lastAccountValue = null;
+  let lastWithdrawable = null;
   let lastPositions = [];
   let dismissedIds = JSON.parse(localStorage.getItem('hlDash_dismissedRecIds') || '[]');
   const BACKEND_FEED_URL = './recommendations.json';
@@ -857,6 +900,7 @@
     const ms = state.marginSummary || {};
     const withdrawable = state.withdrawable;
     lastAccountValue = parseFloat(ms.accountValue) || lastAccountValue;
+    lastWithdrawable = isFinite(parseFloat(withdrawable)) ? parseFloat(withdrawable) : lastWithdrawable;
     let html = ''
       + balLine('Account Value', fmtUsd(ms.accountValue))
       + balLine('Withdrawable', fmtUsd(withdrawable))
@@ -880,8 +924,9 @@
     }
     el.innerHTML = html;
 
+    document.getElementById('usdcBalanceChip').style.display = 'flex';
+    document.getElementById('usdcBalanceValue').textContent = fmtUsd(ms.accountValue);
     document.getElementById('acctSummary').style.display = 'flex';
-    document.getElementById('sAccountValue').textContent = fmtUsd(ms.accountValue);
     document.getElementById('sWithdrawable').textContent = fmtUsd(withdrawable);
     document.getElementById('sMarginUsed').textContent = fmtUsd(ms.totalMarginUsed);
   }
@@ -1049,11 +1094,47 @@
     if(upperWick1 >= 2*body1 && lowerWick1 <= body1*0.5 && body1/range1 < 0.4) patterns.push('shooting_star');
     return patterns;
   }
-  async function loadTechnicals(coin){
+  const MTF_INTERVALS = ['15m', '1h', '4h'];
+  const MTF_MS = { '15m': 15*60000, '1h': 60*60000, '4h': 4*60*60000 };
+  const MTF_LOOKBACK_BARS = 120;
+
+  function taFindPivots(highs, lows, lookback){
+    const pivotHighs = [], pivotLows = [];
+    for(let i = lookback; i < highs.length - lookback; i++){
+      const windowH = highs.slice(i-lookback, i+lookback+1);
+      if(highs[i] === Math.max(...windowH)) pivotHighs.push({ idx: i, price: highs[i] });
+      const windowL = lows.slice(i-lookback, i+lookback+1);
+      if(lows[i] === Math.min(...windowL)) pivotLows.push({ idx: i, price: lows[i] });
+    }
+    return { pivotHighs, pivotLows };
+  }
+  function taClusterLevels(pivots, tolerancePct){
+    const clusters = [];
+    [...pivots].sort((a,b) => a.price - b.price).forEach(p => {
+      const found = clusters.find(c => Math.abs(c.price - p.price) / p.price * 100 <= tolerancePct);
+      if(found){
+        found.price = (found.price * found.tests + p.price) / (found.tests + 1);
+        found.tests += 1;
+        found.lastIdx = Math.max(found.lastIdx, p.idx);
+      } else {
+        clusters.push({ price: p.price, tests: 1, lastIdx: p.idx });
+      }
+    });
+    return clusters.sort((a,b) => b.tests - a.tests);
+  }
+  function taFindSupportResistance(highs, lows){
+    const { pivotHighs, pivotLows } = taFindPivots(highs, lows, 3);
+    return {
+      resistanceLevels: taClusterLevels(pivotHighs, 0.5).slice(0,3),
+      supportLevels: taClusterLevels(pivotLows, 0.5).slice(0,3)
+    };
+  }
+
+  async function loadTimeframeTechnicals(coin, interval){
     try{
       const endTime = Date.now();
-      const startTime = endTime - 15*60000*120;
-      const candles = await infoPost({ type:'candleSnapshot', req:{ coin, interval:'15m', startTime, endTime } });
+      const startTime = endTime - MTF_MS[interval] * MTF_LOOKBACK_BARS;
+      const candles = await infoPost({ type:'candleSnapshot', req:{ coin, interval, startTime, endTime } });
       if(!candles || candles.length < 30) return null;
       const opens = candles.map(c=>parseFloat(c.o)), highs = candles.map(c=>parseFloat(c.h));
       const lows = candles.map(c=>parseFloat(c.l)), closes = candles.map(c=>parseFloat(c.c));
@@ -1064,25 +1145,64 @@
       const bbSd = taStddev(closes, 20);
       const bbUpper = (sma20!=null && bbSd!=null) ? sma20 + 2*bbSd : null;
       const bbLower = (sma20!=null && bbSd!=null) ? sma20 - 2*bbSd : null;
+      const { resistanceLevels, supportLevels } = taFindSupportResistance(highs, lows);
       return {
-        lastClose: closes[closes.length-1], rsi14, sma20, sma50,
+        interval, lastClose: closes[closes.length-1], rsi14, sma20, sma50,
         macd, macdSignal: signal, macdHist: hist,
         bbUpper, bbMid: sma20, bbLower, volSma20: taSma(vols,20), lastVol: vols[vols.length-1],
         patterns: taDetectPatterns(opens,highs,lows,closes),
-        swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50))
+        swingHigh: Math.max(...highs.slice(-50)), swingLow: Math.min(...lows.slice(-50)),
+        resistanceLevels, supportLevels
       };
     }catch(e){ return null; }
   }
-  function formatTechnicalLine(coin, t){
-    if(!t) return coin + ': technical data unavailable';
+
+  async function loadMultiTimeframeTechnicals(coin){
+    const out = {};
+    for(const iv of MTF_INTERVALS){ out[iv] = await loadTimeframeTechnicals(coin, iv); }
+    return out;
+  }
+
+  function timeframeBias(t){
+    if(!t) return 'neutral';
+    let bull = 0, bear = 0;
+    if(t.sma20 != null){ if(t.lastClose > t.sma20) bull++; else bear++; }
+    if(t.macdHist != null){ if(t.macdHist > 0) bull++; else bear++; }
+    if(t.rsi14 != null){ if(t.rsi14 > 50) bull++; else bear++; }
+    if(bull > bear) return 'long';
+    if(bear > bull) return 'short';
+    return 'neutral';
+  }
+
+  function computeAlignment(mtf){
+    const biases = MTF_INTERVALS.map(iv => timeframeBias(mtf[iv]));
+    const longCount = biases.filter(b => b === 'long').length;
+    const shortCount = biases.filter(b => b === 'short').length;
+    const total = MTF_INTERVALS.length;
+    const needed = Math.ceil(total * 2 / 3);
+    if(longCount >= needed) return { direction: 'long', agree: longCount, total };
+    if(shortCount >= needed) return { direction: 'short', agree: shortCount, total };
+    return { direction: null, agree: Math.max(longCount, shortCount), total };
+  }
+
+  function formatMultiTimeframeBlock(coin, mtf, alignment){
     const f = (v,d) => v==null ? 'n/a' : v.toFixed(d);
-    return coin + ': price $'+f(t.lastClose,2)+', RSI14 '+f(t.rsi14,1)
-      + ', SMA20 $'+f(t.sma20,2)+' / SMA50 $'+f(t.sma50,2)
-      + ', MACD '+f(t.macd,4)+' vs signal '+f(t.macdSignal,4)+' (hist '+f(t.macdHist,4)+')'
-      + ', Bollinger $'+f(t.bbLower,2)+'–$'+f(t.bbUpper,2)+' (mid $'+f(t.bbMid,2)+')'
-      + ', volume '+f(t.lastVol,0)+' vs 20-bar avg '+f(t.volSma20,0)
-      + ', 50-bar range $'+f(t.swingLow,2)+'–$'+f(t.swingHigh,2)
-      + ', candlestick patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none detected')+' (15m candles)';
+    const lines = MTF_INTERVALS.map(iv => {
+      const t = mtf[iv];
+      if(!t) return '  ' + iv + ': data unavailable';
+      const res = t.resistanceLevels.length ? t.resistanceLevels.map(l => '$'+l.price.toFixed(2)+' ('+l.tests+'x tested)').join(', ') : 'none found';
+      const sup = t.supportLevels.length ? t.supportLevels.map(l => '$'+l.price.toFixed(2)+' ('+l.tests+'x tested)').join(', ') : 'none found';
+      return '  ' + iv + ': price $'+f(t.lastClose,2)+', RSI14 '+f(t.rsi14,1)
+        + ', SMA20 $'+f(t.sma20,2)+'/SMA50 $'+f(t.sma50,2)
+        + ', MACD hist '+f(t.macdHist,4)
+        + ', Bollinger $'+f(t.bbLower,2)+'-$'+f(t.bbUpper,2)
+        + ', patterns: '+(t.patterns.length ? t.patterns.join(', ') : 'none')
+        + ', resistance: '+res+', support: '+sup;
+    }).join('\n');
+    const alignLine = alignment.direction
+      ? '  Multi-timeframe bias: ' + alignment.direction.toUpperCase() + ' (' + alignment.agree + '/' + alignment.total + ' timeframes agree)'
+      : '  Multi-timeframe bias: NO CLEAR ALIGNMENT (' + alignment.agree + '/' + alignment.total + ' agree at most)';
+    return coin + ':\n' + lines + '\n' + alignLine;
   }
 
   // ---------------- Risk-level resolution (AI value -> technical calc -> settings fallback) ----------------
@@ -1253,8 +1373,8 @@
     return Object.values(signals).filter(s => s.volRatio >= t.volRatio || Math.abs(s.imbalance) >= t.imbalance).map(s => s.coin);
   }
 
-  function buildAgentPrompt(signals, technicals){
-    const techTable = Object.keys(technicals).map(coin => formatTechnicalLine(coin, technicals[coin])).join('\n');
+  function buildAgentPrompt(signals, mtfData, alignments){
+    const techTable = Object.keys(mtfData).map(coin => formatMultiTimeframeBlock(coin, mtfData[coin], alignments[coin])).join('\n\n');
     const rows = Object.values(signals);
     const supportTable = rows.map(r =>
       r.coin+': funding '+(r.funding*100).toFixed(4)+'%/8h, OI '+fmtNum(r.openInterest,0)+', '
@@ -1264,16 +1384,17 @@
     ).join('\n');
 
     const system = "You are JARVIS's trading research sub-agent for a Hyperliquid perpetuals account, acting as a master chart technician. "
-      + "Your PRIMARY basis for every recommendation must be technical analysis: candlestick chart patterns, confirmed by volume, and agreement from "
-      + "popular indicators (RSI, MACD, Bollinger Bands, moving averages) — all computed for you below from real 15-minute candle data. Only recommend "
-      + "a trade when the technical picture is genuinely compelling: a real pattern, confirmed by volume, with at least one indicator in agreement — "
-      + "not a single signal in isolation, and never a trade with no identifiable pattern or indicator confluence. "
+      + "Every coin below has ALREADY been confirmed to have multi-timeframe alignment (agreement across 15m/1h/4h) before reaching you — respect that "
+      + "established direction; don't recommend the opposite direction from what's aligned unless the evidence is overwhelming and you say so explicitly. "
+      + "Your PRIMARY basis for every recommendation must be technical analysis: candlestick chart patterns, confirmed by volume, agreement from popular "
+      + "indicators (RSI, MACD, Bollinger Bands, moving averages) across timeframes, and support/resistance levels — including how many times each level "
+      + "has been tested (more tests generally means a more significant level). Only recommend a trade when the technical picture is genuinely compelling. "
       + "After forming your technical view, do ONE quick supplementary web search per candidate for sentiment and social buzz (X/Twitter, Reddit, "
       + "crypto forums) and recent news — use this only to confirm or flag a conflict with the technical picture, never as the primary reason for a trade. "
       + "Your job: find VERY SHORT-TERM, QUICK-TURNAROUND trade opportunities only — think minutes to roughly 24 hours, not multi-day swing theses. "
       + "You NEVER place trades yourself; you only propose them for human review. "
       + "Return at most 3 ideas — only ones with genuine technical conviction; return fewer or none if nothing qualifies. "
-      + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond the pattern's invalidation point or recent swing), "
+      + "Every idea MUST include a concrete stop_loss_price, placed at a technically sensible level (e.g. beyond a tested support/resistance level or recent swing), "
       + "and ideally within about " + cfg.maxStopLossPct + "% of entry — trades needing a wider stop than that to make sense are usually not a fit here. "
       + "Be concise: rationale <= 35 words, sentiment_note <= 20 words. "
       + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
@@ -1282,7 +1403,7 @@
       + '"entry_price":number,"stop_loss_price":number,"take_profit_price":number|null,'
       + '"suggested_size_pct_equity":number,"suggested_leverage":number,"risk_flags":[string]}]}';
 
-    const user = "Technical readout (primary evidence):\n" + techTable
+    const user = "Multi-timeframe technical readout, including support/resistance levels and how many times each has been tested (primary evidence):\n\n" + techTable
       + "\n\nSupporting market data (funding/OI/book/volume):\n" + supportTable
       + "\n\nFind the best technically-confirmed, quick-turnaround opportunities right now among these coins (or state none if the technical picture isn't compelling for any of them).";
     return { system, user };
@@ -1327,10 +1448,29 @@
     metaEl.textContent = 'Gathering signals and researching '+coins.join(', ')+'…';
     try{
       const signals = await loadSignals(coins);
-      metaEl.textContent = 'Analyzing candlestick patterns and indicators for '+coins.join(', ')+'…';
+      metaEl.textContent = 'Checking multi-timeframe alignment (15m/1h/4h) for '+coins.join(', ')+'…';
+      const mtfData = {};
+      const alignments = {};
+      for(const c of coins){
+        mtfData[c] = await loadMultiTimeframeTechnicals(c);
+        alignments[c] = computeAlignment(mtfData[c]);
+        log(c + ': ' + (alignments[c].direction ? alignments[c].direction.toUpperCase() : 'no alignment') + ' (' + alignments[c].agree + '/' + alignments[c].total + ' timeframes agree)', alignments[c].direction ? 'ok' : '');
+      }
+      const alignedCoins = coins.filter(c => alignments[c].direction !== null);
+      if(!alignedCoins.length){
+        log('No coin reached multi-timeframe alignment (need 2/3 of 15m/1h/4h agreeing) — skipping this scan, nothing sent to Anthropic.', 'err');
+        metaEl.textContent = 'No multi-timeframe alignment found across ' + coins.join(', ') + ' — nothing compelling this scan.';
+        btn.disabled = false; btn.textContent = 'Scan for opportunities';
+        return;
+      }
+
+      const subsetSignals = {}; alignedCoins.forEach(c => { if(signals[c]) subsetSignals[c] = signals[c]; });
+      const subsetMtf = {}; const subsetAlignments = {};
+      alignedCoins.forEach(c => { subsetMtf[c] = mtfData[c]; subsetAlignments[c] = alignments[c]; });
       const technicals = {};
-      for(const c of coins){ technicals[c] = await loadTechnicals(c); }
-      const { system, user } = buildAgentPrompt(signals, technicals);
+      alignedCoins.forEach(c => { technicals[c] = mtfData[c]['15m']; });
+
+      const { system, user } = buildAgentPrompt(subsetSignals, subsetMtf, subsetAlignments);
 
       let newRecs;
       let usedFallback = false;
@@ -1362,7 +1502,7 @@
         newRecs = parsed.recommendations || [];
       }catch(e){
         log('Anthropic unavailable (' + e.message + ') — continuing with technicals-only ideas, no sentiment check this run', 'err');
-        newRecs = buildFallbackRecommendations(coins, technicals, cfg.maxPositionPct, cfg.maxStopLossPct, cfg.defaultTakeProfitPct);
+        newRecs = buildFallbackRecommendations(alignedCoins, technicals, cfg.maxPositionPct, cfg.maxStopLossPct, cfg.defaultTakeProfitPct);
         usedFallback = true;
       }
 
@@ -1377,7 +1517,7 @@
       recommendations = newRecs.concat(recommendations).slice(0, 10);
       renderRecommendations();
       lastFullScanTime = Date.now();
-      metaEl.textContent = 'Last scan: ' + new Date().toLocaleTimeString() + ' — ' + newRecs.length + ' idea(s) found across ' + coins.join(', ') + (usedFallback ? ' (technicals-only fallback)' : '');
+      metaEl.textContent = 'Last scan: ' + new Date().toLocaleTimeString() + ' — ' + newRecs.length + ' idea(s) found across ' + alignedCoins.join(', ') + (usedFallback ? ' (technicals-only fallback)' : '');
       log('Agent scan complete: ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (fallback mode)' : ''), 'ok');
       notifyNewRecommendations(newRecs);
     }catch(e){
@@ -1639,7 +1779,9 @@
       const labels = ['Entry','Stop-loss'].concat(takeProfit ? ['Take-profit'] : []);
       const fillLines = describeOrderResult(result, labels).join(' · ');
       await loadAccountState();
-      const acctLine = lastAccountValue != null ? ('Account value now ' + fmtUsd(lastAccountValue) + '.') : '';
+      const acctLine = lastAccountValue != null
+        ? ('Account value now ' + fmtUsd(lastAccountValue) + ', investable balance ' + fmtUsd(lastWithdrawable) + '.')
+        : '';
       setExecuteStatus('✓ ' + fillLines + '. ' + acctLine, 'ok');
       setTimeout(()=>{ document.getElementById('confirmOverlay').classList.remove('open'); }, 2200);
       recommendations = recommendations.filter(r => r.coin !== coin);
@@ -1986,6 +2128,33 @@
     document.getElementById('scanBtn').addEventListener('click', ()=> runAgentScan());
     document.getElementById('pauseScanBtn').addEventListener('click', togglePauseScan);
     document.getElementById('emergencyExitBtn').addEventListener('click', emergencyExitAll);
+
+    document.getElementById('expandLogBtn').addEventListener('click', ()=>{
+      const container = document.getElementById('logContainer');
+      const btn = document.getElementById('expandLogBtn');
+      const isFull = container.classList.toggle('fullscreen');
+      btn.textContent = isFull ? '✕ Close' : '⛶ Expand';
+    });
+    document.getElementById('clearLogBtn').addEventListener('click', ()=>{
+      document.getElementById('logBox').innerHTML = '';
+    });
+
+    document.getElementById('logFullscreenBtn').addEventListener('click', ()=>{
+      const box = document.getElementById('logBox');
+      const btn = document.getElementById('logFullscreenBtn');
+      const isFull = box.classList.toggle('fullscreen');
+      btn.textContent = isFull ? '✕ Close' : '⛶ Expand';
+      if(isFull) box.scrollTop = 0;
+    });
+    document.addEventListener('keydown', (e)=>{
+      if(e.key === 'Escape'){
+        const box = document.getElementById('logBox');
+        if(box.classList.contains('fullscreen')){
+          box.classList.remove('fullscreen');
+          document.getElementById('logFullscreenBtn').textContent = '⛶ Expand';
+        }
+      }
+    });
     document.getElementById('watchlistFile').addEventListener('change', (e)=>{
       if(e.target.files && e.target.files[0]) handleWatchlistFile(e.target.files[0]);
     });
