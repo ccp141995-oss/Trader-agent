@@ -1,6 +1,216 @@
 {
   "recommendations": [
     {
+      "coin": "SUI",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "price at upper Bollinger Band",
+        "bearish chart pattern"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 2,
+      "rationale": "Technical confluence only: price at upper Bollinger Band, bearish chart pattern. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 0.84124,
+      "stop_loss_price": 0.85,
+      "take_profit_price": 0.83,
+      "suggested_size_pct_equity": 12.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 0.84,
+          "tests": 4
+        },
+        {
+          "price": 0.8,
+          "tests": 2
+        },
+        {
+          "price": 0.82,
+          "tests": 2
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 0.8,
+          "tests": 2
+        },
+        {
+          "price": 0.81,
+          "tests": 2
+        },
+        {
+          "price": 0.78,
+          "tests": 1
+        }
+      ],
+      "chart_patterns": [
+        {
+          "name": "head_and_shoulders",
+          "neckline": 0.8,
+          "confirmed": false
+        },
+        {
+          "name": "rising_wedge"
+        }
+      ],
+      "id": "04h4zwddzr",
+      "generated_at": "2026-08-23T19:03:17.271Z",
+      "expires_at": "2026-08-23T19:33:17.271Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 44,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "kPEPE",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "MACD histogram negative",
+        "price at upper Bollinger Band",
+        "bearish chart pattern"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 3,
+      "rationale": "Technical confluence only: MACD histogram negative, price at upper Bollinger Band, bearish chart pattern. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 0.004094,
+      "stop_loss_price": 0,
+      "take_profit_price": 0,
+      "suggested_size_pct_equity": 12.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 0,
+          "tests": 6
+        },
+        {
+          "price": 0,
+          "tests": 3
+        },
+        {
+          "price": 0,
+          "tests": 2
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 0,
+          "tests": 3
+        },
+        {
+          "price": 0,
+          "tests": 3
+        },
+        {
+          "price": 0,
+          "tests": 3
+        }
+      ],
+      "chart_patterns": [
+        {
+          "name": "double_bottom",
+          "neckline": 0,
+          "confirmed": false
+        },
+        {
+          "name": "descending_triangle"
+        }
+      ],
+      "id": "txyob6decj",
+      "generated_at": "2026-08-23T19:03:17.271Z",
+      "expires_at": "2026-08-23T19:33:17.271Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 45,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "LDO",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "bearish_harami",
+      "indicators_confirming": [
+        "candlestick pattern",
+        "price at upper Bollinger Band",
+        "RSI overbought",
+        "bearish chart pattern"
+      ],
+      "confluence_factors": [],
+      "confluence_score": 4,
+      "rationale": "Technical confluence only: candlestick pattern, price at upper Bollinger Band, RSI overbought, bearish chart pattern. No AI research performed this cycle.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 0.40228,
+      "stop_loss_price": 0.41,
+      "take_profit_price": 0.4,
+      "suggested_size_pct_equity": 12.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no AI research this cycle",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "resistance_levels": [
+        {
+          "price": 0.37,
+          "tests": 3
+        },
+        {
+          "price": 0.36,
+          "tests": 1
+        },
+        {
+          "price": 0.37,
+          "tests": 1
+        }
+      ],
+      "support_levels": [
+        {
+          "price": 0.35,
+          "tests": 2
+        },
+        {
+          "price": 0.36,
+          "tests": 2
+        },
+        {
+          "price": 0.35,
+          "tests": 1
+        }
+      ],
+      "chart_patterns": [
+        {
+          "name": "double_top",
+          "neckline": 0.37,
+          "confirmed": false
+        }
+      ],
+      "id": "8bifzqdenp",
+      "generated_at": "2026-08-23T19:03:17.271Z",
+      "expires_at": "2026-08-23T19:33:17.271Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "auto_trade": false,
+      "telegram_message_id": 46,
+      "telegram_chat_id": "1820130237"
+    },
+    {
       "coin": "SOL",
       "direction": "short",
       "conviction": "low",
