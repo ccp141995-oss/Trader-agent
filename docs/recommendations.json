@@ -2,6 +2,96 @@
   "recommendations": [
     {
       "coin": "BTC",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "MACD histogram negative",
+        "price at upper Bollinger Band"
+      ],
+      "sentiment_note": "Not available — Anthropic was unreachable (likely low credits), so this idea is technicals-only with no sentiment/news check.",
+      "rationale": "Technical confluence only: MACD histogram negative, price at upper Bollinger Band. No AI research performed.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 77005,
+      "stop_loss_price": 77660.38,
+      "take_profit_price": 76021.93,
+      "suggested_size_pct_equity": 2.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no sentiment/news confirmation",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "id": "zu264z36sw",
+      "generated_at": "2026-08-23T03:31:34.064Z",
+      "expires_at": "2026-08-23T06:31:34.064Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "telegram_message_id": 7,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "ETH",
+      "direction": "short",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "MACD histogram negative",
+        "price at upper Bollinger Band"
+      ],
+      "sentiment_note": "Not available — Anthropic was unreachable (likely low credits), so this idea is technicals-only with no sentiment/news check.",
+      "rationale": "Technical confluence only: MACD histogram negative, price at upper Bollinger Band. No AI research performed.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 2410.9,
+      "stop_loss_price": 2447.88,
+      "take_profit_price": 2355.43,
+      "suggested_size_pct_equity": 2.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no sentiment/news confirmation",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "id": "jr8ovo374f",
+      "generated_at": "2026-08-23T03:31:34.064Z",
+      "expires_at": "2026-08-23T06:31:34.064Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "telegram_message_id": 8,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "HYPE",
+      "direction": "long",
+      "conviction": "low",
+      "pattern": "momentum confluence (no single candle pattern)",
+      "indicators_confirming": [
+        "price at lower Bollinger Band",
+        "RSI oversold"
+      ],
+      "sentiment_note": "Not available — Anthropic was unreachable (likely low credits), so this idea is technicals-only with no sentiment/news check.",
+      "rationale": "Technical confluence only: price at lower Bollinger Band, RSI oversold. No AI research performed.",
+      "time_horizon": "Short-term (technical fallback)",
+      "entry_price": 77.804,
+      "stop_loss_price": 76.79,
+      "take_profit_price": 79.32,
+      "suggested_size_pct_equity": 2.5,
+      "suggested_leverage": 1,
+      "risk_flags": [
+        "technicals-only fallback — no sentiment/news confirmation",
+        "stop: technical swing-based (no valid AI value)",
+        "target: 1.5x risk:reward from resolved stop (no valid AI target)"
+      ],
+      "id": "0d7hzt37fn",
+      "generated_at": "2026-08-23T03:31:34.064Z",
+      "expires_at": "2026-08-23T06:31:34.064Z",
+      "source": "backend-fallback",
+      "status": "pending",
+      "telegram_message_id": 9,
+      "telegram_chat_id": "1820130237"
+    },
+    {
+      "coin": "BTC",
       "direction": "long",
       "conviction": "low",
       "pattern": "bullish_engulfing (15m)",
