@@ -6,9 +6,9 @@
 <title>Terminal — Hyperliquid Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="https://unpkg.com/hyperliquid/dist/browser.global.js"></script>
-<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js" defer></script>
+<script src="https://unpkg.com/hyperliquid@1.7.3/dist/browser.global.js" defer></script>
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 <style>
   :root{
     --bg:#05070a;
@@ -204,7 +204,7 @@
   @media (max-width: 860px){
     html, body{ height:auto; }
     .layout{ grid-template-columns:1fr; height:auto; }
-    .main-col, .side-col{ min-height:0; }
+    .main-col, .side-col{ min-height:0; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; }
     #chart{ min-height:300px; height:340px; flex:none; }
     .panel-body{ max-height:60vh; }
     .top-row{ padding:8px 12px; gap:8px; }
@@ -322,6 +322,10 @@
         <div class="field">
           <label>Size (coin units)</label>
           <input type="number" id="sizeInput" placeholder="0.00" step="any">
+        </div>
+        <div class="field" style="grid-column:span 4;">
+          <label>Est. notional value</label>
+          <input type="text" id="ticketNotionalValue" disabled placeholder="Enter price and size above">
         </div>
         <div class="field" style="grid-column:span 2;">
           <label>Stop-loss (optional, USD)</label>
@@ -687,6 +691,39 @@
     return `https://app.hyperliquid.xyz/trade/${coin}`;
   }
 
+  // ---------------- Hyperliquid price formatting ----------------
+  // Hyperliquid requires every price to fit 5 significant figures AND no more than
+  // (6 - szDecimals) decimal places for perps — szDecimals varies per asset, so a flat
+  // .toFixed(2) that happens to work for BTC/ETH can violate this for other coins and get
+  // rejected with "Invalid TP/SL price" or similar.
+  let szDecimalsMap = null;
+  async function getSzDecimals(coin){
+    if(!szDecimalsMap){
+      try{
+        const meta = await infoPost({ type: 'meta' });
+        szDecimalsMap = {};
+        (meta.universe || []).forEach(u => { szDecimalsMap[u.name] = u.szDecimals; });
+      }catch(e){ szDecimalsMap = {}; }
+    }
+    return szDecimalsMap[coin];
+  }
+  function taRoundToSigFigs(num, sigFigs){
+    if(!num || num === 0) return 0;
+    const d = Math.ceil(Math.log10(Math.abs(num)));
+    const power = sigFigs - d;
+    const magnitude = Math.pow(10, power);
+    return Math.round(num * magnitude) / magnitude;
+  }
+  function formatHlPrice(price, szDecimals){
+    if(szDecimals == null) return parseFloat(price.toFixed(2)); // fallback if metadata unavailable
+    const maxDecimals = 6; // perps
+    const allowedDecimals = Math.max(0, maxDecimals - szDecimals);
+    let rounded = taRoundToSigFigs(price, 5);
+    const factor = Math.pow(10, allowedDecimals);
+    rounded = Math.round(rounded * factor) / factor;
+    return rounded;
+  }
+
   function log(msg, kind){
     const box = document.getElementById('logBox');
     const line = document.createElement('div');
@@ -705,6 +742,20 @@
     if(n === undefined || n === null || isNaN(n)) return '—';
     dp = dp === undefined ? 4 : dp;
     return Number(n).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:dp});
+  }
+
+  function fmtRelativeTime(isoString){
+    if(!isoString) return '';
+    const diffMs = Date.now() - new Date(isoString).getTime();
+    if(diffMs < 60000) return 'just now';
+    const mins = Math.round(diffMs / 60000);
+    if(mins < 60) return mins + 'm ago';
+    const hrs = Math.round(mins / 60);
+    if(hrs < 24) return hrs + 'h ago';
+    return Math.round(hrs / 24) + 'd ago';
+  }
+  function fmtExactTime(isoString){
+    return isoString ? new Date(isoString).toLocaleString() : '';
   }
 
   async function infoPost(body){
@@ -828,6 +879,7 @@
         const prevPx = prevMids[currentCoin] ? parseFloat(prevMids[currentCoin]) : px;
         updateMarkPrice(px, px >= prevPx);
       }
+      updateTicketNotional();
     }catch(e){ log('Mids load failed: '+e.message, 'err'); }
   }
 
@@ -990,6 +1042,30 @@
     if(!sdk){ throw new Error('Not connected — open Settings and connect an account.'); }
   }
 
+  function updateTicketNotional(){
+    const el = document.getElementById('ticketNotionalValue');
+    if(!el) return;
+    const sz = parseFloat(document.getElementById('sizeInput').value);
+    const orderType = document.getElementById('orderType').value;
+    let px;
+    if(orderType === 'market'){
+      px = lastMids[currentCoin] ? parseFloat(lastMids[currentCoin]) : null;
+    } else {
+      px = parseFloat(document.getElementById('priceInput').value);
+    }
+    if(!sz || !px || sz <= 0 || px <= 0){
+      el.value = '';
+      el.style.color = '';
+      return;
+    }
+    const notional = sz * px;
+    const equity = lastAccountValue || 0;
+    const pctStr = equity ? ' (' + (notional/equity*100).toFixed(1) + '% of equity)' : '';
+    const belowMin = notional < MIN_ORDER_NOTIONAL;
+    el.value = fmtUsd(notional) + pctStr + (belowMin ? ' — below $'+MIN_ORDER_NOTIONAL+' minimum' : '');
+    el.style.color = belowMin ? 'var(--red)' : '';
+  }
+
   async function submitOrder(){
     try{
       await ensureSdk();
@@ -1031,24 +1107,28 @@
       }
 
       log('Submitting '+(isBuy?'BUY':'SELL')+' '+sz+' '+currentCoin+' @ '+limitPx.toFixed(2)+' ('+tif+')…');
+      const szDecimals = await getSzDecimals(currentCoin);
+      const roundedLimitPx = formatHlPrice(limitPx, szDecimals);
       const orders = [{
         coin: currentCoin + '-PERP', is_buy: isBuy, sz: sz,
-        limit_px: parseFloat(limitPx.toFixed(2)),
+        limit_px: roundedLimitPx,
         order_type: { limit: { tif: tif } }, reduce_only: reduceOnly
       }];
       if(stopLossInput && stopLossInput > 0){
+        const stopPx = formatHlPrice(stopLossInput, szDecimals);
         orders.push({
           coin: currentCoin + '-PERP', is_buy: !isBuy, sz: sz,
-          limit_px: parseFloat(stopLossInput.toFixed(2)),
-          order_type: { trigger: { isMarket: true, triggerPx: stopLossInput.toFixed(2), tpsl: 'sl' } },
+          limit_px: stopPx,
+          order_type: { trigger: { isMarket: true, triggerPx: String(stopPx), tpsl: 'sl' } },
           reduce_only: true
         });
       }
       if(takeProfitInput && takeProfitInput > 0){
+        const tpPx = formatHlPrice(takeProfitInput, szDecimals);
         orders.push({
           coin: currentCoin + '-PERP', is_buy: !isBuy, sz: sz,
-          limit_px: parseFloat(takeProfitInput.toFixed(2)),
-          order_type: { trigger: { isMarket: true, triggerPx: takeProfitInput.toFixed(2), tpsl: 'tp' } },
+          limit_px: tpPx,
+          order_type: { trigger: { isMarket: true, triggerPx: String(tpPx), tpsl: 'tp' } },
           reduce_only: true
         });
       }
@@ -1083,6 +1163,8 @@
       if(!mid) throw new Error('No live price yet for '+coin);
       const slippage = 0.03;
       const limitPx = isBuy ? mid * (1 + slippage) : mid * (1 - slippage);
+      const szDecimals = await getSzDecimals(coin);
+      const roundedLimitPx = formatHlPrice(limitPx, szDecimals);
       // Use the exact size string Hyperliquid gave us (sign stripped) rather than re-deriving
       // through float math, to avoid any precision drift being rejected by the exchange.
       const sizeStr = String(sziRaw).replace('-', '');
@@ -1091,7 +1173,7 @@
         coin: coin + '-PERP',
         is_buy: isBuy,
         sz: parseFloat(sizeStr),
-        limit_px: parseFloat(limitPx.toFixed(2)),
+        limit_px: roundedLimitPx,
         order_type: { limit: { tif: 'Ioc' } },
         reduce_only: true
       });
@@ -1995,6 +2077,12 @@
     const coins = coinsOverride && coinsOverride.length ? coinsOverride : await resolveScanCoins();
     if(!coins.length){ log('No coins to scan — check your watchlist or filtered-universe thresholds in Settings', 'err'); return; }
 
+    if(cfg.address && lastAccountValue != null && lastAccountValue < MIN_ORDER_NOTIONAL){
+      log(`Account equity ($${lastAccountValue.toFixed(2)}) is below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value — no trade could be placed, so scanning is skipped. Fund the account to resume.`, 'err');
+      metaEl.textContent = `Skipped — account equity ($${lastAccountValue.toFixed(2)}) is below the $${MIN_ORDER_NOTIONAL} minimum needed to place any order.`;
+      return;
+    }
+
     btn.disabled = true; btn.textContent = 'Checking technicals…';
     metaEl.textContent = 'Gathering signals for '+coins.join(', ')+'…';
     try{
@@ -2086,6 +2174,7 @@
       }
 
       newRecs.forEach(rec => { if(!rec.id) rec.id = rec.coin + '-' + Date.now() + '-' + Math.random().toString(36).slice(2,7); });
+      newRecs.forEach(rec => { if(!rec.generated_at) rec.generated_at = new Date().toISOString(); });
       newRecs.forEach(rec => { if(technicals[rec.coin] && technicals[rec.coin].recentCandles) rec.chart_candles = technicals[rec.coin].recentCandles; });
       newRecs.forEach(rec => { rec.hyperliquid_url = hyperliquidChartUrl(rec.coin); });
 
@@ -2138,6 +2227,9 @@
 
   function renderFullDetailHtml(r){
     const sectionTitle = (t) => '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:10px 0 4px;">'+t+'</div>';
+    const timestampLine = r.generated_at
+      ? '<div style="font-size:10.5px;color:var(--muted-2);">Recommended ' + fmtExactTime(r.generated_at) + ' (' + fmtRelativeTime(r.generated_at) + ')</div>'
+      : '';
     const setup = [];
     setup.push('Pattern: ' + (r.pattern || '—'));
     if((r.indicators_confirming || []).length) setup.push('Confirming: ' + r.indicators_confirming.join(', '));
@@ -2161,7 +2253,8 @@
     if(r.hyperliquid_url) trade.push('<a href="'+r.hyperliquid_url+'" target="_blank" rel="noopener" style="color:var(--mint);">View '+r.coin+' chart on Hyperliquid ↗</a>');
 
     const style = 'font-size:11.5px;line-height:1.7;color:var(--text);white-space:pre-line;';
-    return sectionTitle('Setup') + '<div style="'+style+'">' + setup.join('\n') + '</div>'
+    return timestampLine
+      + sectionTitle('Setup') + '<div style="'+style+'">' + setup.join('\n') + '</div>'
       + sectionTitle('Analysis') + '<div style="'+style+'">' + analysis.join('\n') + '</div>'
       + sectionTitle('Trade') + '<div style="'+style+'">' + trade.join('\n') + '</div>';
   }
@@ -2208,7 +2301,7 @@
         + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
         + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+confluenceTag+consistencyTag+autoTag+sourceTag+statusBadge+'</span></div>'
         + '<div class="rec-catalyst"><b>'+(r.pattern||'Pattern n/a')+'</b>'+((r.indicators_confirming&&r.indicators_confirming.length)?' — '+r.indicators_confirming.join(', '):'')+'</div>'
-        + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+'</div>'
+        + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+(r.generated_at?' · '+fmtRelativeTime(r.generated_at):'')+'</div>'
         + fundsLine
         + chartLink
         + actions
@@ -2270,7 +2363,7 @@
     if(!hist.length){ el.innerHTML = '<div class="empty-state">No recommendation history yet.</div>'; return; }
     el.innerHTML = hist.map((r, i) => {
       const isLong = r.direction === 'long';
-      const when = r.generated_at ? new Date(r.generated_at).toLocaleString() : (r.recorded_at ? new Date(r.recorded_at).toLocaleString() : '');
+      const when = r.generated_at ? fmtExactTime(r.generated_at) + ' (' + fmtRelativeTime(r.generated_at) + ')' : (r.recorded_at ? fmtExactTime(r.recorded_at) : '');
       return '<div class="rec-card">'
         + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
         + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'
@@ -2338,7 +2431,8 @@
     document.getElementById('executeStatusBox').style.display = 'none';
     document.getElementById('placeConfirmedTrade').textContent = 'Confirm & Place Trade';
     document.getElementById('confirmTitle').textContent = rec.coin + ' — ' + (rec.direction === 'long' ? 'Long' : 'Short') + ' (' + (rec.conviction||'low') + ' conviction, ' + (rec.confluence_score != null ? rec.confluence_score+'/8 factors' : 'n/a') + ')';
-    document.getElementById('confirmSub').innerHTML = (rec.time_horizon || '') + (rec.hyperliquid_url ? ' · <a href="'+rec.hyperliquid_url+'" target="_blank" rel="noopener" style="color:var(--mint);">View chart ↗</a>' : '');
+    const recTimeNote = rec.generated_at ? 'Recommended ' + fmtRelativeTime(rec.generated_at) + ' · ' : '';
+    document.getElementById('confirmSub').innerHTML = recTimeNote + (rec.time_horizon || '') + (rec.hyperliquid_url ? ' · <a href="'+rec.hyperliquid_url+'" target="_blank" rel="noopener" style="color:var(--mint);">View chart ↗</a>' : '');
     document.getElementById('confirmRationale').textContent =
       'Pattern: ' + (rec.pattern || '—') + '\n'
       + 'Confirming indicators: ' + ((rec.indicators_confirming && rec.indicators_confirming.length) ? rec.indicators_confirming.join(', ') : '—') + '\n'
@@ -2473,21 +2567,25 @@
         entryTif = 'Ioc';
       }
 
+      const szDecimals = await getSzDecimals(coin);
+      const roundedEntryPx = formatHlPrice(entryPx, szDecimals);
+      const roundedStopPx = formatHlPrice(stopLoss, szDecimals);
       const orders = [{
         coin: coin + '-PERP', is_buy: isBuy, sz: size,
-        limit_px: parseFloat(entryPx.toFixed(2)),
+        limit_px: roundedEntryPx,
         order_type: { limit: { tif: entryTif } }, reduce_only: false
       }, {
         coin: coin + '-PERP', is_buy: !isBuy, sz: size,
-        limit_px: parseFloat(stopLoss.toFixed(2)),
-        order_type: { trigger: { isMarket: true, triggerPx: stopLoss.toFixed(2), tpsl: 'sl' } },
+        limit_px: roundedStopPx,
+        order_type: { trigger: { isMarket: true, triggerPx: String(roundedStopPx), tpsl: 'sl' } },
         reduce_only: true
       }];
       if(takeProfit){
+        const roundedTpPx = formatHlPrice(takeProfit, szDecimals);
         orders.push({
           coin: coin + '-PERP', is_buy: !isBuy, sz: size,
-          limit_px: parseFloat(takeProfit.toFixed(2)),
-          order_type: { trigger: { isMarket: true, triggerPx: takeProfit.toFixed(2), tpsl: 'tp' } },
+          limit_px: roundedTpPx,
+          order_type: { trigger: { isMarket: true, triggerPx: String(roundedTpPx), tpsl: 'tp' } },
           reduce_only: true
         });
       }
@@ -2795,6 +2893,7 @@
       currentCoin = e.target.value;
       updateSubmitLabel();
       loadCandles();
+      updateTicketNotional();
     });
 
     document.querySelectorAll('#intervalGroup .interval-btn').forEach(btn=>{
@@ -2834,6 +2933,10 @@
       const isMarket = e.target.value === 'market';
       document.getElementById('priceField').style.display = isMarket ? 'none' : 'flex';
       document.getElementById('tifField').style.display = isMarket ? 'none' : 'flex';
+      updateTicketNotional();
+    });
+    ['priceInput','sizeInput'].forEach(id => {
+      document.getElementById(id).addEventListener('input', updateTicketNotional);
     });
 
     document.getElementById('submitOrderBtn').addEventListener('click', submitOrder);
@@ -2913,19 +3016,37 @@
   // ---------------- Boot ----------------
   async function boot(){
     wireUi();
-    initChart();
-    await loadMeta();
-    await loadMids();
-    await loadCandles();
+    try{ initChart(); }catch(e){ log('Chart failed to initialize: ' + e.message, 'err'); }
+
+    // Each step is isolated: a single failed request (far more likely on a flaky mobile
+    // connection) no longer silently kills everything after it. startPolling() always runs
+    // regardless, so a failed first attempt self-heals on the next interval automatically.
+    try{ await loadMeta(); }catch(e){ log('Loading coin list failed: ' + e.message + ' — will retry automatically.', 'err'); }
+    try{ await loadMids(); }catch(e){ log('Loading live prices failed: ' + e.message + ' — will retry automatically.', 'err'); }
+    try{ await loadCandles(); }catch(e){ log('Loading chart data failed: ' + e.message + ' — will retry automatically.', 'err'); }
+
     startPolling();
-    if(cfg.address && cfg.agentKey){ connect(); }
-    else {
+
+    if(cfg.address && cfg.agentKey){
+      try{ connect(); }catch(e){ log('Connect failed: ' + e.message, 'err'); }
+    } else {
       const badge = document.getElementById('netBadge');
-      badge.textContent = 'Disconnected';
+      if(badge) badge.textContent = 'Disconnected';
     }
   }
 
-  boot();
+  // Deferred head scripts (LightweightCharts, HyperliquidSDK, XLSX) execute before
+  // DOMContentLoaded, in order — waiting for that event guarantees they're all defined by
+  // the time boot() runs, without making the browser block initial page parsing on those
+  // three downloads first (meaningfully faster perceived load on slower mobile connections).
+  document.addEventListener('DOMContentLoaded', () => {
+    boot().catch(e => {
+      // Last-resort net: if something truly unexpected still escapes boot(), at least make it
+      // visible on the page instead of a silent console-only failure with a permanently stuck UI.
+      console.error('Boot failed unexpectedly:', e);
+      try{ log('Startup error: ' + e.message + ' — try reloading the page.', 'err'); }catch(e2){}
+    });
+  });
 })();
 </script>
 </body>
