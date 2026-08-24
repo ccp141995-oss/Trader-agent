@@ -33,6 +33,8 @@ const INFO_URL = HL_EXEC_NETWORK === 'mainnet' ? 'https://api.hyperliquid.xyz/in
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
 const OFFSET_PATH = path.join(__dirname, 'telegram_offset.json');
 const SHARED_CONFIG_PATH = path.join(__dirname, '..', 'docs', 'agent-config.json');
+const CIRCUIT_BREAKER_PATH = path.join(__dirname, '..', 'docs', 'circuit_breaker.json');
+let CIRCUIT_BREAKER_DRAWDOWN_PCT = parseFloat(process.env.CIRCUIT_BREAKER_DRAWDOWN_PCT || '25');
 const POLL_BUDGET_MS = 2.5 * 60 * 1000; // leave real breathing room in the shared concurrency queue for the scanner
 
 function readJson(p, fallback){ try{ return JSON.parse(fs.readFileSync(p, 'utf8')); }catch(e){ return fallback; } }
@@ -47,6 +49,7 @@ function loadSharedConfig(){
   if(shared.maxStopLossPct) MAX_STOP_LOSS_PCT = parseFloat(shared.maxStopLossPct);
   if(shared.maxTakeProfitPct) MAX_TAKE_PROFIT_PCT = parseFloat(shared.maxTakeProfitPct);
   if(shared.maxEntryDeviationPct) MAX_ENTRY_DEVIATION_PCT = parseFloat(shared.maxEntryDeviationPct);
+  if(shared.circuitBreakerDrawdownPct) CIRCUIT_BREAKER_DRAWDOWN_PCT = parseFloat(shared.circuitBreakerDrawdownPct);
   console.log(`Using dashboard-published risk config: max ${MAX_POSITION_PCT}% equity, ${MAX_LEVERAGE}x leverage, ${DEFAULT_TAKE_PROFIT_PCT}% default TP, ${MAX_STOP_LOSS_PCT}% max stop distance, ${MAX_TAKE_PROFIT_PCT}% max TP distance, ${MAX_ENTRY_DEVIATION_PCT}% max entry deviation (updated ${shared.updated_at || 'unknown'})`);
 }
 
@@ -163,6 +166,102 @@ async function getEffectiveEquity(){
 async function getAccountEquity(){
   const { effectiveEquity } = await getEffectiveEquity();
   return effectiveEquity || null;
+}
+
+// ---------------- Circuit breaker: suspend trading + close everything on a severe drawdown ----------------
+function loadCircuitBreakerState(){
+  return readJson(CIRCUIT_BREAKER_PATH, { tripped: false, trippedAt: null, reason: null, equityHistory: [] });
+}
+function saveCircuitBreakerState(cb){ writeJson(CIRCUIT_BREAKER_PATH, cb); }
+
+// Records the current equity as a timestamped sample (used to build the rolling 24h baseline)
+// and checks for a sustained drawdown — comparing against the equity from ~24h ago specifically,
+// not "since the bot started" or "since midnight", so normal position volatility over minutes or
+// hours doesn't false-trigger; only a genuine decline sustained across a full day does.
+async function recordEquityAndCheckDrawdown(){
+  const { effectiveEquity } = await getEffectiveEquity();
+  const cb = loadCircuitBreakerState();
+  if(effectiveEquity == null) return cb; // couldn't read equity this run — don't record a bad sample
+
+  const now = Date.now();
+  cb.equityHistory = (cb.equityHistory || []).concat([{ t: now, equity: effectiveEquity }]);
+  // Prune anything older than 48h — we only ever need up to a 24h-old baseline, a second day of
+  // slack covers any gap in scheduled runs without the file growing indefinitely.
+  const cutoff = now - 48 * 60 * 60 * 1000;
+  cb.equityHistory = cb.equityHistory.filter(s => s.t >= cutoff);
+
+  if(cb.tripped){ saveCircuitBreakerState(cb); return cb; } // already tripped, no need to re-check
+
+  const dayAgo = now - 24 * 60 * 60 * 1000;
+  const baselineCandidates = cb.equityHistory.filter(s => s.t <= dayAgo);
+  if(!baselineCandidates.length){ saveCircuitBreakerState(cb); return cb; } // not enough history yet
+  const baseline = baselineCandidates[baselineCandidates.length - 1]; // closest sample to exactly 24h old
+
+  if(baseline.equity > 0){
+    const drawdownPct = (baseline.equity - effectiveEquity) / baseline.equity * 100;
+    if(drawdownPct >= CIRCUIT_BREAKER_DRAWDOWN_PCT){
+      cb.tripped = true;
+      cb.trippedAt = new Date(now).toISOString();
+      cb.reason = `Equity dropped ${drawdownPct.toFixed(1)}% in 24h ($${baseline.equity.toFixed(2)} → $${effectiveEquity.toFixed(2)}), at or beyond the ${CIRCUIT_BREAKER_DRAWDOWN_PCT}% threshold.`;
+    }
+  }
+  saveCircuitBreakerState(cb);
+  return cb;
+}
+
+// Cancels every resting order and closes every open position with an aggressive IOC order —
+// used only when the circuit breaker actually trips. Best-effort: keeps going even if an
+// individual order fails, and reports exactly what succeeded/failed rather than assuming.
+async function closeEverythingAndCancelAll(){
+  const results = { closedPositions: [], failedPositions: [], cancelledOrders: 0, failedCancels: 0 };
+  try{
+    const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
+    const openPositions = (state.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0);
+    for(const p of openPositions){
+      const coin = p.position.coin;
+      const szi = parseFloat(p.position.szi);
+      const isBuy = szi < 0; // close a short by buying, a long by selling
+      try{
+        const mid = await getCurrentMid(coin);
+        const slippage = 0.05; // wider band than normal — urgency matters more than price here
+        const limitPx = isBuy ? mid * (1 + slippage) : mid * (1 - slippage);
+        const szDecimals = await getSzDecimals(coin);
+        await sdk.exchange.placeOrder({
+          coin: coin + '-PERP', is_buy: isBuy, sz: Math.abs(szi),
+          limit_px: formatHlPrice(limitPx, szDecimals),
+          order_type: { limit: { tif: 'Ioc' } }, reduce_only: true
+        });
+        results.closedPositions.push(coin);
+      }catch(e){ results.failedPositions.push(coin + ': ' + e.message); }
+    }
+  }catch(e){ results.failedPositions.push('Could not read positions: ' + e.message); }
+
+  try{
+    const openOrders = await infoPost({ type: 'openOrders', user: HL_ACCOUNT_ADDRESS });
+    for(const o of (openOrders || [])){
+      try{ await sdk.exchange.cancelOrder({ coin: o.coin, o: o.oid }); results.cancelledOrders++; }
+      catch(e){ results.failedCancels++; }
+    }
+  }catch(e){ /* covered by failedCancels being 0 with no orders found — non-fatal */ }
+
+  return results;
+}
+
+async function tripCircuitBreaker(cb, drawdownReason){
+  console.error('CIRCUIT BREAKER TRIPPED: ' + drawdownReason);
+  const closeResults = await closeEverythingAndCancelAll();
+  const lines = [
+    `🚨🚨 CIRCUIT BREAKER TRIPPED 🚨🚨`,
+    ``,
+    drawdownReason,
+    ``,
+    `• Positions closed: ${closeResults.closedPositions.length ? closeResults.closedPositions.join(', ') : 'none open'}`,
+  ];
+  if(closeResults.failedPositions.length) lines.push(`• Failed to close: ${closeResults.failedPositions.join('; ')}`);
+  lines.push(`• Orders cancelled: ${closeResults.cancelledOrders}${closeResults.failedCancels ? ' (' + closeResults.failedCancels + ' failed to cancel)' : ''}`);
+  lines.push(``);
+  lines.push(`⚠ All automatic and manual trading is suspended — no new positions will open, confirmed or automatic, until this is manually reset from the dashboard. Review what happened before resuming.`);
+  await tg('sendMessage', { chat_id: TELEGRAM_CHAT_ID, text: lines.join('\n') });
 }
 
 async function getAccountSnapshot(){
@@ -311,6 +410,13 @@ async function executeTrade(rec){
 }
 
 async function executeAndReport(rec, labelPrefix){
+  const cb = loadCircuitBreakerState();
+  if(cb.tripped){
+    rec.status = 'denied';
+    rec.error = 'Blocked by circuit breaker';
+    await editStatusMessage(rec, `🚨 ${rec.coin} ${rec.direction} — blocked. The circuit breaker is tripped (${cb.reason || 'severe drawdown detected'}) and all trading is suspended until manually reset from the dashboard.`);
+    return;
+  }
   rec.status = 'processing';
   await editStatusMessage(rec, `⏳ ${rec.coin} ${rec.direction} — ${labelPrefix}, checking current price and risk limits before placing…`);
   try{
@@ -426,6 +532,18 @@ async function sweepExpired(feed){
 async function main(){
   if(!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID){ console.log('Telegram not configured, exiting.'); return; }
   loadSharedConfig();
+
+  // Circuit breaker check runs first, every cycle, regardless of anything else — if a genuine
+  // 24h drawdown is detected right now, everything gets closed and cancelled immediately rather
+  // than waiting for the rest of this run's normal flow.
+  if(HL_ACCOUNT_ADDRESS){
+    const cbBefore = loadCircuitBreakerState();
+    const wasTripped = cbBefore.tripped;
+    const cbAfter = await recordEquityAndCheckDrawdown();
+    if(cbAfter.tripped && !wasTripped){
+      await tripCircuitBreaker(cbAfter, cbAfter.reason);
+    }
+  }
 
   let offsetState = readJson(OFFSET_PATH, { offset: 0 });
   const feed = readJson(FEED_PATH, { recommendations: [] });

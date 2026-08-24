@@ -40,6 +40,7 @@ let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
 let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
 const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
 const MAX_RECS_PER_SCAN = 2; // keep only the top-N by confidence, even if more candidates qualify
+const AUTO_TRADE_MIN_SCORE = 7; // out of 8 — only the #1-ranked rec, and only above this score, auto-executes
 let MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
 let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
 let DEFAULT_TAKE_PROFIT_PCT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
@@ -52,6 +53,7 @@ function shortId(){
 
 const STATE_PATH = path.join(__dirname, 'state.json');
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
+const CIRCUIT_BREAKER_PATH = path.join(__dirname, '..', 'docs', 'circuit_breaker.json');
 const CHARTS_DIR = path.join(__dirname, '..', 'docs', 'charts');
 const SHARED_CONFIG_PATH = path.join(__dirname, '..', 'docs', 'agent-config.json');
 
@@ -90,8 +92,8 @@ async function infoPost(body){
 // (default for most users), the perps-specific endpoint can read $0 even with real balance —
 // the real number lives in the spot/unified endpoint instead. This is only used for the
 // funds-required estimate shown in the message; execution always re-checks live equity itself.
-async function loadEstimatedEquity(){
-  if(!HL_ACCOUNT_ADDRESS) return null;
+async function loadAccountSnapshot(){
+  if(!HL_ACCOUNT_ADDRESS) return { effectiveEquity: null, openPositionCoins: new Set() };
   try{
     const [perpState, spotState] = await Promise.all([
       infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch(() => null),
@@ -99,8 +101,15 @@ async function loadEstimatedEquity(){
     ]);
     const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
     const spotUsdc = spotState ? (parseFloat(((spotState.balances || []).find(b => b.coin === 'USDC') || {}).total) || 0) : 0;
-    return perpEquity > 0 ? perpEquity : spotUsdc;
-  }catch(e){ return null; }
+    const effectiveEquity = perpEquity > 0 ? perpEquity : spotUsdc;
+    const openPositionCoins = new Set(
+      perpState ? (perpState.assetPositions || [])
+        .filter(p => parseFloat(p.position.szi) !== 0)
+        .map(p => p.position.coin)
+        : []
+    );
+    return { effectiveEquity, openPositionCoins };
+  }catch(e){ return { effectiveEquity: null, openPositionCoins: new Set() }; }
 }
 
 async function loadMarketContext(coins){
@@ -1156,6 +1165,15 @@ async function main(){
   console.log('AI research is ' + (AI_RESEARCH_ENABLED ? 'ENABLED' : 'DISABLED') + ' this run.');
   console.log('Auto-trade is ' + (AUTO_TRADE_ENABLED ? 'ENABLED — confirmed ideas will execute without a tap' : 'disabled — every idea needs your confirm/deny') + '.');
 
+  // The circuit breaker (equity drawdown detection + emergency close-all) is checked and acted
+  // on by poll_telegram.js, which has execution capability. This scanner only needs to respect
+  // the flag once tripped — no point generating new ideas that could never execute anyway.
+  const circuitBreaker = readJson(CIRCUIT_BREAKER_PATH, { tripped: false });
+  if(circuitBreaker.tripped){
+    console.log('Circuit breaker is tripped (' + (circuitBreaker.reason || 'severe drawdown') + ') — skipping this scan entirely until manually reset from the dashboard.');
+    return;
+  }
+
   const allCoins = await resolveCoins();
   if(!allCoins.length){ console.log('No coins resolved (empty watchlist, or filtered-universe thresholds too strict), exiting.'); return; }
 
@@ -1164,8 +1182,11 @@ async function main(){
 
   // No point running any analysis — free or paid — if the account can't place even the smallest
   // possible order. Checked before anything else so a wallet with insufficient funds doesn't
-  // burn API calls or Anthropic cost every single cycle.
-  const equityCheck = await loadEstimatedEquity();
+  // burn API calls or Anthropic cost every single cycle. Also grabs open positions here so we
+  // only need the one account fetch for both purposes.
+  const accountSnapshot = await loadAccountSnapshot();
+  const equityCheck = accountSnapshot.effectiveEquity;
+  const openPositionCoins = accountSnapshot.openPositionCoins;
   if(equityCheck != null && equityCheck < MIN_ORDER_NOTIONAL){
     console.log(`Account equity ($${equityCheck.toFixed(2)}) is below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value — skipping this scan entirely, no trade could be placed.`);
     const sinceLastAlert = Date.now() - (state.lastInsufficientEquityAlertTime || 0);
@@ -1180,7 +1201,7 @@ async function main(){
     }
     return;
   } else if(equityCheck == null){
-    console.log('HL_ACCOUNT_ADDRESS not configured for scan.js (optional) — skipping the equity pre-check. The scan will still run; execution-time checks in the poller remain the real safety net.');
+    console.log('HL_ACCOUNT_ADDRESS not configured for scan.js (optional) — skipping the equity pre-check and open-position exclusion. The scan will still run; execution-time checks in the poller remain the real safety net.');
   }
 
   // Technical checks run every time, unconditionally — they're free. Nothing below this line
@@ -1188,7 +1209,15 @@ async function main(){
   console.log(`Checking signals (${SCAN_MODE} mode) for: ` + allCoins.join(', '));
   const signals = await loadSignals(allCoins);
   applyOiMomentum(signals, state);
-  const tripped = findTrippedCoins(signals);
+  let tripped = findTrippedCoins(signals);
+
+  if(openPositionCoins.size){
+    const skippedForOpenPosition = tripped.filter(c => openPositionCoins.has(c));
+    if(skippedForOpenPosition.length){
+      console.log('Skipping (already have an open position): ' + skippedForOpenPosition.join(', '));
+      tripped = tripped.filter(c => !openPositionCoins.has(c));
+    }
+  }
 
   if(!tripped.length){
     console.log('No signal tripped this run.');
@@ -1271,11 +1300,12 @@ async function main(){
     newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; });
   }
 
-  // Rank by our own computed confluence score (not the model's self-assessed conviction label)
-  // and keep only the strongest candidates — done before any per-rec work below (chart images,
-  // Telegram sends) so nothing gets wasted on ideas that won't make the cut.
+  // Rank by our own computed confluence score (not the model's self-assessed conviction label).
+  // Always sorted — not just when capping is needed — since the auto-trade eligibility check
+  // below relies on index 0 genuinely being the top-ranked idea, even when there are only 1-2
+  // candidates and no capping actually occurs.
+  newRecs.sort((a,b) => (b.confluence_score || 0) - (a.confluence_score || 0));
   if(newRecs.length > MAX_RECS_PER_SCAN){
-    newRecs.sort((a,b) => (b.confluence_score || 0) - (a.confluence_score || 0));
     const dropped = newRecs.slice(MAX_RECS_PER_SCAN).map(r => r.coin + ' (' + (r.confluence_score||0) + '/8)');
     newRecs = newRecs.slice(0, MAX_RECS_PER_SCAN);
     console.log(`Capped to top ${MAX_RECS_PER_SCAN} by confidence — dropped: ${dropped.join(', ')}`);
@@ -1328,13 +1358,26 @@ async function main(){
   console.log('=== PHASE 3 START: all analysis finalized, sending Telegram now for ' + newRecs.length + ' rec(s) ===');
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + EXECUTION_WINDOW_MIN * 60000).toISOString();
-  for(const rec of newRecs){
+  newRecs.forEach((rec, idx) => {
     rec.id = shortId();
     rec.generated_at = now;
     rec.expires_at = expiresAt;
     rec.source = usedFallback ? 'backend-fallback' : 'backend';
     rec.status = 'pending';
-    rec.auto_trade = AUTO_TRADE_ENABLED;
+
+    // Both top-2 recs still get sent for your review either way — this only controls which one
+    // (if any) is eligible to execute *without* a tap. Only the single highest-ranked rec per
+    // scan (idx === 0, since newRecs is already sorted by confluence_score at this point) can
+    // ever qualify, and only if its score genuinely clears the bar — a second-place idea, even a
+    // strong one, still requires your explicit confirm.
+    const isTopPick = idx === 0;
+    const score = rec.confluence_score || 0;
+    rec.auto_trade = AUTO_TRADE_ENABLED && isTopPick && score >= AUTO_TRADE_MIN_SCORE;
+    if(AUTO_TRADE_ENABLED && isTopPick && !rec.auto_trade){
+      rec.risk_flags = (rec.risk_flags || []).concat([`auto-trade skipped — score ${score}/8 doesn't clear the ${AUTO_TRADE_MIN_SCORE}/8 bar, needs your manual confirm`]);
+    }
+  });
+  for(const rec of newRecs){
 
     const t15 = technicals[rec.coin];
     if(t15 && t15.recentCandles){
