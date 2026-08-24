@@ -238,6 +238,8 @@
 </head>
 <body>
 
+<div id="circuitBreakerBanner" style="display:none;background:#5a0d0d;color:#fff;padding:12px 16px;font-size:12.5px;line-height:1.6;border-bottom:2px solid #ff5c5c;"></div>
+
 <header>
   <div class="top-row">
     <div class="brand">
@@ -532,6 +534,15 @@
       The AI sets entry, stop-loss, and take-profit prices from its own technical analysis — but every one of them is checked against the limits above before you ever see it, and again right before execution. A stop farther than your max distance gets replaced with a technical swing-based stop (or capped outright); a take-profit farther than its max gets capped the same way; an entry too far from the live market price gets replaced with the live price. Combined with max position size, this bounds how much a single trade can lose regardless of what the AI (or a stale price) suggests. The default take-profit fills in automatically wherever one is left blank — on manual orders below and on agent recommendations that didn't suggest one — but you can always edit or clear it before confirming.
     </div>
 
+    <div class="section-label">Circuit breaker</div>
+    <div class="field">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Suspend trading if equity drops this much in 24h (%)</label>
+      <input type="number" id="circuitBreakerDrawdownPctInput" placeholder="25" step="any">
+    </div>
+    <div class="warn-box" style="margin-top:10px;border-color:var(--red-dim);color:var(--red);">
+      Checked by the Telegram poller every ~5 minutes, comparing current account equity against equity from exactly ~24 hours ago — not "since the bot started," so ordinary intraday position volatility won't trip it, only a genuine sustained decline over a full day will. If it trips: every open position gets closed and every resting order cancelled immediately, an alert is sent, and all trading — manual or automatic, on both the dashboard and Telegram — stays suspended until manually reset from the banner that appears at the top of this page. This uses total account equity (including unrealized P&L on open positions), not just idle cash — that's intentional, since a circuit breaker needs to catch a deteriorating open position before it gets worse, not just after you've already closed it.
+    </div>
+
     <div class="section-label">Sync to GitHub bot</div>
     <div class="field">
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">GitHub repo (owner/name)</label>
@@ -622,6 +633,7 @@
     maxPositionPct:'hlDash_maxPositionPct', maxLeverage:'hlDash_maxLeverage',
     defaultTakeProfitPct:'hlDash_defaultTakeProfitPct', maxStopLossPct:'hlDash_maxStopLossPct',
     maxTakeProfitPct:'hlDash_maxTakeProfitPct', maxEntryDeviationPct:'hlDash_maxEntryDeviationPct',
+    circuitBreakerDrawdownPct:'hlDash_circuitBreakerDrawdownPct',
     autoTradeEnabled:'hlDash_autoTradeEnabled',
     scanMode:'hlDash_scanMode', filteredTopN:'hlDash_filteredTopN',
     filteredMinOI:'hlDash_filteredMinOI', filteredMinVolume24h:'hlDash_filteredMinVolume24h',
@@ -641,6 +653,7 @@
     maxStopLossPct: parseFloat(localStorage.getItem(LS_KEYS.maxStopLossPct)) || 5,
     maxTakeProfitPct: parseFloat(localStorage.getItem(LS_KEYS.maxTakeProfitPct)) || 15,
     maxEntryDeviationPct: parseFloat(localStorage.getItem(LS_KEYS.maxEntryDeviationPct)) || 2,
+    circuitBreakerDrawdownPct: parseFloat(localStorage.getItem(LS_KEYS.circuitBreakerDrawdownPct)) || 25,
     autoTradeEnabled: localStorage.getItem(LS_KEYS.autoTradeEnabled) === 'true',
     scanMode: localStorage.getItem(LS_KEYS.scanMode) || 'watchlist',
     filteredTopN: parseInt(localStorage.getItem(LS_KEYS.filteredTopN), 10) || 20,
@@ -1095,6 +1108,10 @@
   }
 
   async function submitOrder(){
+    if(circuitBreakerState.tripped){
+      log('🚨 Circuit breaker is tripped — all trading is suspended until it\'s reset (see the banner at the top).', 'err');
+      return;
+    }
     try{
       await ensureSdk();
       const sz = parseFloat(document.getElementById('sizeInput').value);
@@ -1180,6 +1197,24 @@
     }catch(e){ log('Cancel failed: ' + e.message, 'err'); }
   }
 
+  async function cancelLeftoverOrders(coin){
+    // grouping:'normalTpsl' at order-placement time makes Hyperliquid auto-cancel the sibling
+    // TP or SL the moment the other one fills — but that only applies when one of THOSE two
+    // orders is what closed the position. A manual close (this button, or Emergency Exit) is a
+    // separate, independent order — neither TP nor SL actually triggered, so the exchange has
+    // no reason to cancel them, and they're left resting with nothing left to reduce.
+    try{
+      const openOrders = await infoPost({ type: 'openOrders', user: cfg.address });
+      const leftover = (openOrders || []).filter(o => o.coin === coin + '-PERP' || o.coin === coin);
+      if(!leftover.length) return;
+      log('Cancelling ' + leftover.length + ' leftover order(s) for ' + coin + ' (TP/SL with no position left to reduce)…');
+      for(const o of leftover){
+        try{ await sdk.exchange.cancelOrder({ coin: o.coin, o: o.oid }); }
+        catch(e){ log('Could not cancel leftover order ' + o.oid + ' for ' + coin + ': ' + e.message, 'err'); }
+      }
+    }catch(e){ log('Could not check for leftover orders on ' + coin + ': ' + e.message, 'err'); }
+  }
+
   async function closePosition(coin, sziRaw, btnEl){
     const originalLabel = btnEl ? btnEl.textContent : null;
     if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Closing…'; btnEl.style.borderColor=''; btnEl.style.color=''; btnEl.title=''; }
@@ -1213,6 +1248,7 @@
       if(apiError) throw new Error(apiError.error);
 
       log('Close response: ' + JSON.stringify(result).slice(0,140), 'ok');
+      await cancelLeftoverOrders(coin);
       if(btnEl){ btnEl.textContent = '✓ Closed'; }
       await loadAccountState();
     }catch(e){
@@ -2088,6 +2124,11 @@
   async function runAgentScan(coinsOverride){
     const btn = document.getElementById('scanBtn');
     const metaEl = document.getElementById('agentMeta');
+    if(circuitBreakerState.tripped){
+      log('🚨 Circuit breaker is tripped — scanning is suspended until it\'s reset (see the banner at the top).', 'err');
+      metaEl.textContent = 'Suspended — circuit breaker is tripped. Reset it above to resume.';
+      return;
+    }
     const coins = coinsOverride && coinsOverride.length ? coinsOverride : await resolveScanCoins();
     if(!coins.length){ log('No coins to scan — check your watchlist or filtered-universe thresholds in Settings', 'err'); return; }
 
@@ -2097,23 +2138,32 @@
       return;
     }
 
+    const openPositionCoins = new Set((lastPositions || []).map(ap => ap.position.coin));
+    const skippedForOpenPosition = coins.filter(c => openPositionCoins.has(c));
+    const scanCoins = coins.filter(c => !openPositionCoins.has(c));
+    if(skippedForOpenPosition.length) log('Skipping (already have an open position): ' + skippedForOpenPosition.join(', '), '');
+    if(!scanCoins.length){
+      metaEl.textContent = 'All candidate coins already have an open position — nothing new to scan.';
+      return;
+    }
+
     btn.disabled = true; btn.textContent = 'Checking technicals…';
-    metaEl.textContent = 'Gathering signals for '+coins.join(', ')+'…';
+    metaEl.textContent = 'Gathering signals for '+scanCoins.join(', ')+'…';
     try{
-      const signals = await loadSignals(coins);
+      const signals = await loadSignals(scanCoins);
       applyOiMomentum(signals);
-      metaEl.textContent = 'Checking multi-timeframe alignment (15m/1h/4h) for '+coins.join(', ')+'…';
+      metaEl.textContent = 'Checking multi-timeframe alignment (15m/1h/4h) for '+scanCoins.join(', ')+'…';
       const mtfData = {};
       const alignments = {};
-      for(const c of coins){
+      for(const c of scanCoins){
         mtfData[c] = await loadMultiTimeframeTechnicals(c);
         alignments[c] = computeAlignment(mtfData[c]);
         log(c + ': ' + (alignments[c].direction ? alignments[c].direction.toUpperCase() : 'no alignment') + ' (' + alignments[c].agree + '/' + alignments[c].total + ' timeframes agree)', alignments[c].direction ? 'ok' : '');
       }
-      let alignedCoins = coins.filter(c => alignments[c].direction !== null);
+      let alignedCoins = scanCoins.filter(c => alignments[c].direction !== null);
       if(!alignedCoins.length){
         log('No coin reached multi-timeframe alignment (need 2/3 of 15m/1h/4h agreeing) this scan.', 'err');
-        metaEl.textContent = 'No multi-timeframe alignment found across ' + coins.join(', ') + ' — nothing compelling this scan.';
+        metaEl.textContent = 'No multi-timeframe alignment found across ' + scanCoins.join(', ') + ' — nothing compelling this scan.';
         btn.disabled = false; btn.textContent = 'Scan for opportunities';
         return;
       }
@@ -2273,13 +2323,27 @@
       + sectionTitle('Trade') + '<div style="'+style+'">' + trade.join('\n') + '</div>';
   }
 
+  async function fetchChartImageObjectUrl(config){
+    if(!config) return null;
+    try{
+      const res = await fetch('https://quickchart.io/chart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chart: config, width: 1000, height: 450, backgroundColor: '#0d1117', version: '3' })
+      });
+      if(!res.ok) return null;
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    }catch(e){ return null; }
+  }
+
   async function loadChartIntoHolder(rec, holderId){
     const holder = document.getElementById(holderId);
     if(!holder) return;
 
     // Prefer the static PNG the backend commits alongside the recommendation — a plain <img>
-    // tag loading a same-origin file, with no fetch call, no CORS exposure, and no URL-length
-    // concern at all. This covers every backend-sourced recommendation.
+    // tag loading a same-origin file, no fetch call needed at all. Covers every backend-sourced
+    // recommendation.
     if(rec.chart_image_path){
       holder.innerHTML = '<img src="'+rec.chart_image_path+'" style="width:100%;border-radius:6px;margin-top:8px;display:block;" '
         + 'onerror="this.parentElement.innerHTML=\'<div style=&quot;color:var(--muted-2);font-size:10.5px;margin-top:6px;&quot;>Chart image not found.</div>\'">';
@@ -2287,22 +2351,15 @@
     }
 
     // Fallback for recommendations generated directly in the dashboard (manual/auto scan),
-    // which never go through the backend's file-writing step. A GET request with a trimmed
-    // candle count keeps the URL short enough to be safe, and <img src> loading a cross-origin
-    // image is never subject to CORS restrictions — unlike the POST-based render this used to
-    // do, which depends on QuickChart sending correct CORS headers for a non-simple request
-    // and can fail outright as "Failed to fetch" if it doesn't.
+    // which never go through the backend's file-writing step — full 250-candle render, same as
+    // before.
     if(!rec.chart_candles){ holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">No chart data saved for this recommendation.</div>'; return; }
     holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Loading chart…</div>';
-    const trimmed = {
-      opens: rec.chart_candles.opens.slice(-40), highs: rec.chart_candles.highs.slice(-40),
-      lows: rec.chart_candles.lows.slice(-40), closes: rec.chart_candles.closes.slice(-40)
-    };
-    const config = buildChartConfig(rec.coin, trimmed, rec.entry_price, rec.stop_loss_price, rec.take_profit_price);
-    if(!config){ holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Chart unavailable.</div>'; return; }
-    const url = 'https://quickchart.io/chart?c=' + encodeURIComponent(JSON.stringify(config)) + '&width=1000&height=450&backgroundColor=%230d1117&version=3';
-    holder.innerHTML = '<img src="'+url+'" style="width:100%;border-radius:6px;margin-top:8px;display:block;" '
-      + 'onerror="this.parentElement.innerHTML=\'<div style=&quot;color:var(--muted-2);font-size:10.5px;margin-top:6px;&quot;>Chart unavailable (QuickChart unreachable).</div>\'">';
+    const config = buildChartConfig(rec.coin, rec.chart_candles, rec.entry_price, rec.stop_loss_price, rec.take_profit_price);
+    const url = await fetchChartImageObjectUrl(config);
+    holder.innerHTML = url
+      ? '<img src="'+url+'" style="width:100%;border-radius:6px;margin-top:8px;display:block;">'
+      : '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Chart unavailable (QuickChart unreachable).</div>';
   }
 
   function renderRecommendations(){
@@ -2558,6 +2615,12 @@
     const statusBox = document.getElementById('executeStatusBox');
     statusBox.style.display = 'none';
     const btn = document.getElementById('placeConfirmedTrade');
+    if(circuitBreakerState.tripped){
+      statusBox.style.display = 'block';
+      statusBox.className = 'risk-check bad';
+      statusBox.textContent = '🚨 Circuit breaker is tripped — all trading is suspended until it\'s reset (see the banner at the top).';
+      return;
+    }
     try{
       if(btn.disabled){
         // Defensive: should never fire since disabled buttons don't dispatch clicks, but
@@ -2730,6 +2793,7 @@
       maxStopLossPct: cfg.maxStopLossPct,
       maxTakeProfitPct: cfg.maxTakeProfitPct,
       maxEntryDeviationPct: cfg.maxEntryDeviationPct,
+      circuitBreakerDrawdownPct: cfg.circuitBreakerDrawdownPct,
       aiResearchEnabled: cfg.aiResearchEnabled,
       autoTradeEnabled: cfg.autoTradeEnabled,
       updated_at: new Date().toISOString()
@@ -2744,6 +2808,20 @@
     return btoa(unescape(encodeURIComponent(str)));
   }
 
+  async function publishJsonToGitHub(filePath, content, commitMessage){
+    if(!cfg.githubPat || !cfg.githubRepo) throw new Error('Add a GitHub repo and token in Settings first.');
+    const apiUrl = 'https://api.github.com/repos/' + cfg.githubRepo + '/contents/' + filePath;
+    let sha = null;
+    const getRes = await fetch(apiUrl, { headers: ghHeaders() });
+    if(getRes.ok){ const getData = await getRes.json(); sha = getData.sha; }
+    const body = { message: commitMessage, content: b64EncodeUnicode(JSON.stringify(content, null, 2)) };
+    if(sha) body.sha = sha;
+    const putRes = await fetch(apiUrl, { method:'PUT', headers: ghHeaders(), body: JSON.stringify(body) });
+    const putData = await putRes.json();
+    if(!putRes.ok){ throw new Error(putData.message || ('HTTP ' + putRes.status)); }
+    return putData;
+  }
+
   async function publishConfigToGitHub(){
     const statusEl = document.getElementById('publishStatus');
     if(!cfg.githubPat || !cfg.githubRepo){
@@ -2751,26 +2829,66 @@
       log('Add a GitHub token and repo in Settings to publish config to the bot', 'err');
       return;
     }
-    const apiUrl = 'https://api.github.com/repos/' + cfg.githubRepo + '/contents/docs/agent-config.json';
     if(statusEl) statusEl.textContent = 'Publishing…';
     try{
-      let sha = null;
-      const getRes = await fetch(apiUrl, { headers: ghHeaders() });
-      if(getRes.ok){ const getData = await getRes.json(); sha = getData.sha; }
-      const content = buildSharedConfig();
-      const body = {
-        message: 'Update agent config from dashboard',
-        content: b64EncodeUnicode(JSON.stringify(content, null, 2))
-      };
-      if(sha) body.sha = sha;
-      const putRes = await fetch(apiUrl, { method:'PUT', headers: ghHeaders(), body: JSON.stringify(body) });
-      const putData = await putRes.json();
-      if(!putRes.ok){ throw new Error(putData.message || ('HTTP ' + putRes.status)); }
+      await publishJsonToGitHub('docs/agent-config.json', buildSharedConfig(), 'Update agent config from dashboard');
       if(statusEl) statusEl.textContent = 'Published to ' + cfg.githubRepo + ' at ' + new Date().toLocaleTimeString() + '.';
       log('Published settings to the bot (docs/agent-config.json updated)', 'ok');
     }catch(e){
       if(statusEl) statusEl.textContent = 'Publish failed: ' + e.message;
       log('Publish to GitHub failed: ' + e.message, 'err');
+    }
+  }
+
+  // ---------------- Circuit breaker ----------------
+  let circuitBreakerState = { tripped: false };
+
+  async function pollCircuitBreaker(){
+    try{
+      const res = await fetch('circuit_breaker.json', { cache: 'no-store' });
+      if(!res.ok) return;
+      const cb = await res.json();
+      const wasTripped = circuitBreakerState.tripped;
+      circuitBreakerState = cb;
+      renderCircuitBreakerBanner();
+      if(cb.tripped && !wasTripped){
+        log('🚨 Circuit breaker tripped: ' + (cb.reason || 'severe drawdown detected') + ' — all trading suspended.', 'err');
+      }
+    }catch(e){ /* file may not exist yet, or running from file:// — ignore */ }
+  }
+
+  function renderCircuitBreakerBanner(){
+    const el = document.getElementById('circuitBreakerBanner');
+    if(!el) return;
+    if(!circuitBreakerState.tripped){ el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.innerHTML = '🚨 <b>TRADING SUSPENDED</b> — circuit breaker tripped'
+      + (circuitBreakerState.trippedAt ? ' ' + new Date(circuitBreakerState.trippedAt).toLocaleString() : '') + '.<br>'
+      + (circuitBreakerState.reason || 'Severe drawdown detected.') + '<br>'
+      + 'All positions and orders were closed automatically. No new trades — manual or automatic — will execute until this is reset below.<br>'
+      + '<button id="resetCircuitBreakerBtn" style="margin-top:8px;padding:8px 14px;background:transparent;border:1px solid #fff;color:#fff;border-radius:5px;font-weight:700;cursor:pointer;">Reset Circuit Breaker</button>';
+    document.getElementById('resetCircuitBreakerBtn').addEventListener('click', resetCircuitBreaker);
+  }
+
+  async function resetCircuitBreaker(){
+    const ok = confirm('Reset the circuit breaker and resume trading?\n\nOnly do this after reviewing what caused the drawdown. The 24-hour drawdown window restarts from right now.');
+    if(!ok) return;
+    try{
+      const resetPayload = {
+        tripped: false,
+        trippedAt: null,
+        reason: null,
+        // Restart the window from right now, seeded with current equity if known — otherwise a
+        // freshly reset breaker could immediately re-trip against a baseline from before the
+        // person even had a chance to review and decide to resume.
+        equityHistory: lastAccountValue ? [{ t: Date.now(), equity: lastAccountValue }] : []
+      };
+      await publishJsonToGitHub('docs/circuit_breaker.json', resetPayload, 'Reset circuit breaker from dashboard');
+      circuitBreakerState = resetPayload;
+      renderCircuitBreakerBanner();
+      log('Circuit breaker reset — trading resumed. 24h drawdown window restarted from now.', 'ok');
+    }catch(e){
+      log('Could not reset circuit breaker: ' + e.message, 'err');
     }
   }
 
@@ -2832,7 +2950,9 @@
     pollTimers.push(setInterval(loadCandles, 15000));
     pollTimers.push(setInterval(autoScanTick, 120000));
     pollTimers.push(setInterval(pollBackendFeed, 60000));
+    pollTimers.push(setInterval(pollCircuitBreaker, 30000));
     pollBackendFeed();
+    pollCircuitBreaker();
   }
 
   // ---------------- UI wiring ----------------
@@ -2854,6 +2974,7 @@
       document.getElementById('maxStopLossPctInput').value = cfg.maxStopLossPct;
       document.getElementById('maxTakeProfitPctInput').value = cfg.maxTakeProfitPct;
       document.getElementById('maxEntryDeviationPctInput').value = cfg.maxEntryDeviationPct;
+      document.getElementById('circuitBreakerDrawdownPctInput').value = cfg.circuitBreakerDrawdownPct;
       document.getElementById('githubRepoInput').value = cfg.githubRepo;
       document.getElementById('githubPatInput').value = cfg.githubPat;
       document.getElementById('autoPublishConfig').checked = cfg.autoPublishConfig;
@@ -2883,6 +3004,7 @@
       cfg.maxStopLossPct = parseFloat(document.getElementById('maxStopLossPctInput').value) || cfg.maxStopLossPct;
       cfg.maxTakeProfitPct = parseFloat(document.getElementById('maxTakeProfitPctInput').value) || cfg.maxTakeProfitPct;
       cfg.maxEntryDeviationPct = parseFloat(document.getElementById('maxEntryDeviationPctInput').value) || cfg.maxEntryDeviationPct;
+      cfg.circuitBreakerDrawdownPct = parseFloat(document.getElementById('circuitBreakerDrawdownPctInput').value) || cfg.circuitBreakerDrawdownPct;
       cfg.aiResearchEnabled = document.getElementById('aiResearchEnabled').checked;
       cfg.autoTradeEnabled = document.getElementById('autoTradeEnabled').checked;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
@@ -2905,6 +3027,7 @@
       cfg.maxStopLossPct = parseFloat(document.getElementById('maxStopLossPctInput').value) || 5;
       cfg.maxTakeProfitPct = parseFloat(document.getElementById('maxTakeProfitPctInput').value) || 15;
       cfg.maxEntryDeviationPct = parseFloat(document.getElementById('maxEntryDeviationPctInput').value) || 2;
+      cfg.circuitBreakerDrawdownPct = parseFloat(document.getElementById('circuitBreakerDrawdownPctInput').value) || 25;
       cfg.autoTradeEnabled = document.getElementById('autoTradeEnabled').checked;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
@@ -2912,30 +3035,54 @@
       cfg.autoScanEnabled = document.getElementById('autoScanEnabled').checked;
       cfg.autoScanIntervalMin = parseFloat(document.getElementById('autoScanIntervalInput').value) || 30;
       cfg.signalSensitivity = document.getElementById('signalSensitivityInput').value;
-      localStorage.setItem(LS_KEYS.network, cfg.network);
-      localStorage.setItem(LS_KEYS.address, cfg.address);
-      localStorage.setItem(LS_KEYS.agentKey, cfg.agentKey);
-      localStorage.setItem('hlDash_aiResearchEnabled', cfg.aiResearchEnabled);
-      localStorage.setItem(LS_KEYS.autoTradeEnabled, cfg.autoTradeEnabled);
-      localStorage.setItem(LS_KEYS.anthropicKey, cfg.anthropicKey);
-      localStorage.setItem(LS_KEYS.watchlist, cfg.watchlist);
-      localStorage.setItem(LS_KEYS.scanMode, cfg.scanMode);
-      localStorage.setItem(LS_KEYS.filteredTopN, cfg.filteredTopN);
-      localStorage.setItem(LS_KEYS.filteredMinOI, cfg.filteredMinOI);
-      localStorage.setItem(LS_KEYS.filteredMinVolume24h, cfg.filteredMinVolume24h);
-      localStorage.setItem(LS_KEYS.maxPositionPct, cfg.maxPositionPct);
-      localStorage.setItem(LS_KEYS.maxLeverage, cfg.maxLeverage);
-      localStorage.setItem(LS_KEYS.defaultTakeProfitPct, cfg.defaultTakeProfitPct);
-      localStorage.setItem(LS_KEYS.maxStopLossPct, cfg.maxStopLossPct);
-      localStorage.setItem(LS_KEYS.maxTakeProfitPct, cfg.maxTakeProfitPct);
-      localStorage.setItem(LS_KEYS.maxEntryDeviationPct, cfg.maxEntryDeviationPct);
-      localStorage.setItem(LS_KEYS.githubRepo, cfg.githubRepo);
-      localStorage.setItem(LS_KEYS.githubPat, cfg.githubPat);
-      localStorage.setItem(LS_KEYS.autoPublishConfig, cfg.autoPublishConfig);
+
+      // One failed setItem (mobile Safari private-browsing restrictions and storage quota
+      // errors are real, well-documented WebKit quirks) used to silently abort every save
+      // after it in this list. Each key now saves independently, and — critically — address
+      // and agent key are verified by reading them straight back, since a silent persistence
+      // failure on exactly those two would look identical to "the connection doesn't work."
+      const failedKeys = [];
+      function safeSet(key, val){
+        try{ localStorage.setItem(key, val); }catch(e){ failedKeys.push(key); }
+      }
+      safeSet(LS_KEYS.network, cfg.network);
+      safeSet(LS_KEYS.address, cfg.address);
+      safeSet(LS_KEYS.agentKey, cfg.agentKey);
+      safeSet('hlDash_aiResearchEnabled', cfg.aiResearchEnabled);
+      safeSet(LS_KEYS.autoTradeEnabled, cfg.autoTradeEnabled);
+      safeSet(LS_KEYS.anthropicKey, cfg.anthropicKey);
+      safeSet(LS_KEYS.watchlist, cfg.watchlist);
+      safeSet(LS_KEYS.scanMode, cfg.scanMode);
+      safeSet(LS_KEYS.filteredTopN, cfg.filteredTopN);
+      safeSet(LS_KEYS.filteredMinOI, cfg.filteredMinOI);
+      safeSet(LS_KEYS.filteredMinVolume24h, cfg.filteredMinVolume24h);
+      safeSet(LS_KEYS.maxPositionPct, cfg.maxPositionPct);
+      safeSet(LS_KEYS.maxLeverage, cfg.maxLeverage);
+      safeSet(LS_KEYS.defaultTakeProfitPct, cfg.defaultTakeProfitPct);
+      safeSet(LS_KEYS.maxStopLossPct, cfg.maxStopLossPct);
+      safeSet(LS_KEYS.maxTakeProfitPct, cfg.maxTakeProfitPct);
+      safeSet(LS_KEYS.maxEntryDeviationPct, cfg.maxEntryDeviationPct);
+      safeSet(LS_KEYS.circuitBreakerDrawdownPct, cfg.circuitBreakerDrawdownPct);
+      safeSet(LS_KEYS.githubRepo, cfg.githubRepo);
+      safeSet(LS_KEYS.githubPat, cfg.githubPat);
+      safeSet(LS_KEYS.autoPublishConfig, cfg.autoPublishConfig);
+      safeSet(LS_KEYS.autoScanEnabled, cfg.autoScanEnabled);
+      safeSet(LS_KEYS.autoScanIntervalMin, cfg.autoScanIntervalMin);
+      safeSet(LS_KEYS.signalSensitivity, cfg.signalSensitivity);
+
+      // Verify the two credentials that actually matter for connecting genuinely persisted —
+      // don't just assume setItem worked.
+      const addressPersisted = localStorage.getItem(LS_KEYS.address) === cfg.address;
+      const keyPersisted = localStorage.getItem(LS_KEYS.agentKey) === cfg.agentKey;
+      if(!addressPersisted || !keyPersisted){
+        log('⚠ Settings may not have saved correctly — your browser blocked or reverted the save (common in Private Browsing mode, or when local storage is full). Try leaving Private Browsing, or freeing up storage, then save again.', 'err');
+      } else if(failedKeys.length){
+        log('Most settings saved, but some optional ones failed to persist: ' + failedKeys.join(', '), 'err');
+      } else {
+        log('Settings saved.', 'ok');
+      }
+
       if(cfg.autoPublishConfig) publishConfigToGitHub();
-      localStorage.setItem(LS_KEYS.autoScanEnabled, cfg.autoScanEnabled);
-      localStorage.setItem(LS_KEYS.autoScanIntervalMin, cfg.autoScanIntervalMin);
-      localStorage.setItem(LS_KEYS.signalSensitivity, cfg.signalSensitivity);
       if(cfg.autoScanEnabled && typeof Notification !== 'undefined' && Notification.permission === 'default'){
         Notification.requestPermission();
       }
