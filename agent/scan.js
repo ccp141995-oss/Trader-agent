@@ -1082,10 +1082,16 @@ function formatTelegramMessage(rec){
   const confirming = (rec.indicators_confirming || []).length ? rec.indicators_confirming.join(', ') : '—';
   const fallbackNote = rec.source === 'backend-fallback' ? '\n🔧 Technicals-only this cycle (AI unavailable or off).' : '';
   const consistencyNote = rec.self_consistent ? ' · verified 2x' : '';
+  // Formatted explicitly as UTC (not the local time of whoever reads it) since this runs
+  // server-side with no way to know the reader's timezone.
+  const timestamp = rec.generated_at
+    ? new Date(rec.generated_at).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+    : null;
 
   const lines = [];
   lines.push(`🤖 JARVIS — ${rec.coin} ${dir}`);
   lines.push(`${rec.conviction || 'low'} conviction · ${rec.confluence_score != null ? rec.confluence_score + '/8 factors' : 'n/a'}${consistencyNote}${rec.trend_strength ? ' · ' + rec.trend_strength + ' trend' : ''}${fallbackNote}`);
+  if(timestamp) lines.push(`Recommended: ${timestamp}`);
 
   lines.push('');
   lines.push('SETUP');
@@ -1154,6 +1160,27 @@ async function main(){
 
   const state = readJson(STATE_PATH, { lastAiCallTime: 0, recentIds: [] });
   const feed = readJson(FEED_PATH, { recommendations: [] });
+
+  // No point running any analysis — free or paid — if the account can't place even the smallest
+  // possible order. Checked before anything else so a wallet with insufficient funds doesn't
+  // burn API calls or Anthropic cost every single cycle.
+  const equityCheck = await loadEstimatedEquity();
+  if(equityCheck != null && equityCheck < MIN_ORDER_NOTIONAL){
+    console.log(`Account equity ($${equityCheck.toFixed(2)}) is below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value — skipping this scan entirely, no trade could be placed.`);
+    const sinceLastAlert = Date.now() - (state.lastInsufficientEquityAlertTime || 0);
+    if(sinceLastAlert > 6 * 60 * 60 * 1000){ // rate-limited to once per 6 hours, not every 15-min cycle
+      await sendTelegram(
+        `⚠ Scanning is paused — account equity is $${equityCheck.toFixed(2)}, below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value. `
+        + `No trade could be placed regardless of what the scan finds, so it's skipped entirely (no API cost either) until funded. `
+        + `This will keep checking silently and resume automatically once equity is at least $${MIN_ORDER_NOTIONAL} — you won't get another alert like this for 6 hours.`
+      );
+      state.lastInsufficientEquityAlertTime = Date.now();
+      writeJson(STATE_PATH, state);
+    }
+    return;
+  } else if(equityCheck == null){
+    console.log('HL_ACCOUNT_ADDRESS not configured for scan.js (optional) — skipping the equity pre-check. The scan will still run; execution-time checks in the poller remain the real safety net.');
+  }
 
   // Technical checks run every time, unconditionally — they're free. Nothing below this line
   // is gated by any cooldown until the point where Anthropic itself might get called.
@@ -1267,21 +1294,30 @@ async function main(){
 
   // Funds-required estimate: "X% of equity" is the notional position size, not the cash locked —
   // actual margin required is notional / leverage, which can be a meaningfully smaller number.
-  // Fetched once per run and estimated here; execution always re-checks live equity itself.
+  // Reuses the equity value already fetched by the pre-scan check above — no extra API call.
   //
   // Hyperliquid rejects any order below $10 notional outright ("invalid size"). A small account
   // combined with a conservative suggested % can easily compute below that floor, so the
   // suggested % itself gets bumped up here — before it ever reaches Telegram — rather than
-  // silently failing at execution or (worse) confusingly rejecting with no explanation.
-  const estimatedEquity = await loadEstimatedEquity();
+  // silently failing at execution or (worse) confusingly rejecting with no explanation. If
+  // reaching $10 requires exceeding the configured max position %, that's flagged explicitly
+  // rather than silently overridden — Hyperliquid's exchange floor wins over the setting since
+  // there's no way to place a smaller order, but the person should always know when that happens.
+  const estimatedEquity = equityCheck;
   newRecs.forEach(rec => {
     if(estimatedEquity && rec.suggested_size_pct_equity && rec.suggested_leverage){
       let notional = estimatedEquity * (rec.suggested_size_pct_equity / 100);
       if(notional < MIN_ORDER_NOTIONAL && estimatedEquity > 0){
+        const originalPct = rec.suggested_size_pct_equity;
         const bumpedPct = (MIN_ORDER_NOTIONAL / estimatedEquity) * 100;
         rec.suggested_size_pct_equity = parseFloat(bumpedPct.toFixed(2));
         notional = MIN_ORDER_NOTIONAL;
-        rec.risk_flags = (rec.risk_flags || []).concat([`size increased to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value`]);
+        const exceedsCap = bumpedPct > MAX_POSITION_PCT + 0.01;
+        rec.risk_flags = (rec.risk_flags || []).concat([
+          exceedsCap
+            ? `size increased from ${originalPct}% to ${bumpedPct.toFixed(1)}% of equity to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum — exceeds your configured max position size (${MAX_POSITION_PCT}%); this account may be too small for your risk settings`
+            : `size increased to ${bumpedPct.toFixed(1)}% of equity to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value`
+        ]);
       }
       rec.estimated_notional = notional;
       rec.estimated_margin = notional / rec.suggested_leverage;

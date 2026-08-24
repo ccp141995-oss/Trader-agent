@@ -72,6 +72,44 @@ async function infoPost(body){
   return res.json();
 }
 
+// ---------------- Hyperliquid price formatting ----------------
+// Hyperliquid requires every price to fit 5 significant figures AND no more than
+// (6 - szDecimals) decimal places for perps — szDecimals varies per asset, so a flat
+// .toFixed(2) that happens to work for BTC/ETH can violate this for other coins and get
+// rejected with "Invalid TP/SL price" or similar. szDecimals is cached once per run.
+let szDecimalsCache = null;
+async function getSzDecimals(coin){
+  if(!szDecimalsCache){
+    try{
+      const meta = await infoPost({ type: 'meta' });
+      szDecimalsCache = {};
+      (meta.universe || []).forEach(u => { szDecimalsCache[u.name] = u.szDecimals; });
+    }catch(e){
+      console.error('Could not fetch szDecimals metadata, falling back to 2-decimal price rounding:', e.message);
+      szDecimalsCache = {};
+    }
+  }
+  return szDecimalsCache[coin];
+}
+
+function roundToSigFigs(num, sigFigs){
+  if(!num || num === 0) return 0;
+  const d = Math.ceil(Math.log10(Math.abs(num)));
+  const power = sigFigs - d;
+  const magnitude = Math.pow(10, power);
+  return Math.round(num * magnitude) / magnitude;
+}
+
+function formatHlPrice(price, szDecimals){
+  if(szDecimals == null) return parseFloat(price.toFixed(2)); // fallback if metadata unavailable
+  const maxDecimals = 6; // perps; spot would be 8, not used here
+  const allowedDecimals = Math.max(0, maxDecimals - szDecimals);
+  let rounded = roundToSigFigs(price, 5);
+  const factor = Math.pow(10, allowedDecimals);
+  rounded = Math.round(rounded * factor) / factor;
+  return rounded;
+}
+
 function findRec(feed, id){ return (feed.recommendations || []).find(r => r.id === id); }
 
 async function editStatusMessage(rec, text){
@@ -212,44 +250,51 @@ async function executeTrade(rec){
     throw new Error(`No usable balance found (checked both Perps and Spot/unified) on ${HL_EXEC_NETWORK} for ${addrShort} — check HL_EXEC_NETWORK matches the network your funds are on, and that HL_ACCOUNT_ADDRESS is your main wallet, not the agent wallet.`);
   }
 
-  const pctEquity = Math.min(rec.suggested_size_pct_equity || MAX_POSITION_PCT, MAX_POSITION_PCT);
+  let pctEquity = Math.min(rec.suggested_size_pct_equity || MAX_POSITION_PCT, MAX_POSITION_PCT);
   const leverage = Math.min(rec.suggested_leverage || 1, MAX_LEVERAGE);
   let notional = equity * (pctEquity / 100);
   let sizeBumped = false;
+  let exceedsPositionCap = false;
   if(notional < MIN_ORDER_NOTIONAL){
     if(equity < MIN_ORDER_NOTIONAL){
       throw new Error(`Account equity ($${equity.toFixed(2)}) is below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value — no position size is possible on this account right now.`);
     }
     notional = MIN_ORDER_NOTIONAL;
+    const bumpedPct = (MIN_ORDER_NOTIONAL / equity) * 100;
+    exceedsPositionCap = bumpedPct > MAX_POSITION_PCT + 0.01;
+    pctEquity = bumpedPct; // keep reported %/margin figures consistent with the actual notional used
     sizeBumped = true;
   }
   const size = notional / currentMid;
   if(!size || size <= 0) throw new Error('Computed size was zero — check account equity and risk settings');
 
+  const szDecimals = await getSzDecimals(rec.coin);
   const slippage = 0.03;
-  const entryPx = isBuy ? currentMid * (1 + slippage) : currentMid * (1 - slippage);
+  const entryPx = formatHlPrice(isBuy ? currentMid * (1 + slippage) : currentMid * (1 - slippage), szDecimals);
+  const stopPx = formatHlPrice(rec.stop_loss_price, szDecimals);
 
   const orders = [{
     coin: rec.coin + '-PERP', is_buy: isBuy, sz: parseFloat(size.toFixed(5)),
-    limit_px: parseFloat(entryPx.toFixed(2)), order_type: { limit: { tif: 'Ioc' } }, reduce_only: false
+    limit_px: entryPx, order_type: { limit: { tif: 'Ioc' } }, reduce_only: false
   }, {
     coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
-    limit_px: parseFloat(rec.stop_loss_price.toFixed(2)),
-    order_type: { trigger: { isMarket: true, triggerPx: rec.stop_loss_price.toFixed(2), tpsl: 'sl' } }, reduce_only: true
+    limit_px: stopPx,
+    order_type: { trigger: { isMarket: true, triggerPx: String(stopPx), tpsl: 'sl' } }, reduce_only: true
   }];
   if(rec.take_profit_price){
-    orders.push({
-      coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
-      limit_px: parseFloat(rec.take_profit_price.toFixed(2)),
-      order_type: { trigger: { isMarket: true, triggerPx: rec.take_profit_price.toFixed(2), tpsl: 'tp' } }, reduce_only: true
-    });
-  } else if(DEFAULT_TAKE_PROFIT_PCT){
-    const mult = 1 + (DEFAULT_TAKE_PROFIT_PCT/100) * (isBuy ? 1 : -1);
-    const tpPx = parseFloat((currentMid * mult).toFixed(2));
+    const tpPx = formatHlPrice(rec.take_profit_price, szDecimals);
     orders.push({
       coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
       limit_px: tpPx,
-      order_type: { trigger: { isMarket: true, triggerPx: tpPx.toFixed(2), tpsl: 'tp' } }, reduce_only: true
+      order_type: { trigger: { isMarket: true, triggerPx: String(tpPx), tpsl: 'tp' } }, reduce_only: true
+    });
+  } else if(DEFAULT_TAKE_PROFIT_PCT){
+    const mult = 1 + (DEFAULT_TAKE_PROFIT_PCT/100) * (isBuy ? 1 : -1);
+    const tpPx = formatHlPrice(currentMid * mult, szDecimals);
+    orders.push({
+      coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
+      limit_px: tpPx,
+      order_type: { trigger: { isMarket: true, triggerPx: String(tpPx), tpsl: 'tp' } }, reduce_only: true
     });
     rec.take_profit_price = tpPx;
   }
@@ -262,21 +307,25 @@ async function executeTrade(rec){
   });
 
   const result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
-  return { result, size, entryPx, leverage, pctEquity, sizeBumped };
+  return { result, size, entryPx, leverage, pctEquity, sizeBumped, exceedsPositionCap };
 }
 
 async function executeAndReport(rec, labelPrefix){
   rec.status = 'processing';
   await editStatusMessage(rec, `⏳ ${rec.coin} ${rec.direction} — ${labelPrefix}, checking current price and risk limits before placing…`);
   try{
-    const { size, entryPx, leverage, pctEquity, sizeBumped, result } = await executeTrade(rec);
+    const { size, entryPx, leverage, pctEquity, sizeBumped, exceedsPositionCap, result } = await executeTrade(rec);
     rec.status = 'executed';
     rec.executed_at = new Date().toISOString();
 
     const labels = ['Entry', 'Stop-loss'].concat(rec.take_profit_price ? ['Take-profit'] : []);
     const fillLines = describeOrderResult(result, labels).join('\n');
     const snapshot = await getAccountSnapshot();
-    const bumpNote = sizeBumped ? `\n• Note: size increased to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value` : '';
+    const bumpNote = sizeBumped
+      ? (exceedsPositionCap
+          ? `\n• Note: size increased to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum — this exceeds your configured max position size (${MAX_POSITION_PCT}%); this account may be too small for your risk settings`
+          : `\n• Note: size increased to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value`)
+      : '';
 
     await editStatusMessage(rec,
       `✅ ${rec.coin} ${rec.direction} — executed on ${HL_EXEC_NETWORK}\n\n`
