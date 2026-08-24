@@ -10,7 +10,7 @@
   "maxStopLossPct": 20,
   "maxTakeProfitPct": 150,
   "maxEntryDeviationPct": 2,
-  "aiResearchEnabled": true,
+  "aiResearchEnabled": false,
   "autoTradeEnabled": false,
-  "updated_at": "2026-08-24T03:10:02.655Z"
+  "updated_at": "2026-08-24T03:26:11.647Z"
 }
