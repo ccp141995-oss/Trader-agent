@@ -226,9 +226,27 @@ A new toggle — **off by default** — lets confirmed ideas execute without you
 - Every outcome — executed, failed, or cancelled — still gets the full Telegram report: fill status, account snapshot, or the specific error.
 - Toggle it in Settings (syncs to the backend via the GitHub publish flow) or set `AUTO_TRADE_ENABLED=true` as a GitHub Variable directly.
 
+## Minimum equity to scan
+
+If the account can't place even the smallest possible order, there's no point running any analysis on it. The backend now checks equity (using the same Unified-Account-aware resolution as everywhere else) right at the start of each cycle, before the free signal check even runs — if it's below Hyperliquid's $10 minimum, the whole scan is skipped, with a Telegram alert rate-limited to once per 6 hours (not every 15-minute cycle) so a small/unfunded account doesn't spam the chat while you're deciding whether to fund it. The dashboard's manual and auto-scan got the same gate. This is a pure cost/waste optimization — no analysis, no Anthropic call, nothing — for a trade that could never actually be placed.
+
+**A correctness fix alongside this**: the $10-minimum bump (added previously) wasn't checked against your configured max position size, and worse, the *reported* percentage/margin figures in the execution message didn't reflect the bump at all — they'd silently show the original, smaller percentage even though a larger one was actually used. Both are fixed: bumping now explicitly flags when it exceeds your max position % ("this account may be too small for your risk settings"), and all reported figures are recomputed to match what was actually executed. Verified with a battery of test cases: a bump that stays within cap, one that exceeds it, equity too low for any order at all, and an exact-boundary case — all resolve correctly.
+
+## Price precision ("Invalid TP/SL price" / "invalid size" errors)
+
+Hyperliquid requires every price to fit 5 significant figures, and no more than (6 − that asset's `szDecimals`) decimal places — a per-coin value, not the same for every asset. The code previously formatted every price with a flat `.toFixed(2)`, which happens to work for BTC/ETH-range prices but can badly mangle prices for other coins — e.g. a coin at $0.0234567 would get rounded to $0.02, destroying almost all precision, and get rejected outright.
+
+Fixed everywhere an order gets placed (backend execution, dashboard confirm, manual order ticket, closing positions): asset metadata (`szDecimals` per coin) is fetched once and cached, and every price — entry, stop-loss, take-profit — is rounded through a proper `formatHlPrice()` that respects both the 5-sig-fig and per-asset decimal rules, not a blanket 2 decimals.
+
 ## Direct chart link
 
 Every recommendation — Telegram, dashboard rec cards, the expanded detail view, History, and the confirm modal — now includes a direct link to that coin's live chart on Hyperliquid (`app.hyperliquid.xyz/trade/{COIN}`). Always mainnet, regardless of which network you're actually scanning or executing on — the real, liquid chart is what's useful to look at.
+
+## Auto-trade eligibility is stricter than the general top-2 cap
+
+Both top-2 recommendations still get sent to Telegram/dashboard every scan for your review either way — this only controls which one, if any, is allowed to execute *without* a tap when auto-trade is on. Only the single **highest-ranked** idea per scan can ever qualify (never the second-place one, even if it's also strong), and only if its confluence score is **7 or 8 out of 8** — anything at 6 or below still requires your manual confirm regardless of rank. Tested against five cases including the exact boundary (a score of exactly 6 correctly does not qualify, since the bar is "greater than 6").
+
+Worth knowing as a side effect: the technicals-only fallback engine can only ever reach a maximum score of 6 (it doesn't have access to the AI-reported factors), so a fallback-sourced recommendation can never qualify for auto-trade under this rule — only AI-researched, self-consistency-verified ideas can. This seemed like the right outcome rather than something to work around: unattended execution should have the highest bar in the system, not the same bar as everything else.
 
 ## Top recommendations per scan
 
@@ -248,6 +266,68 @@ Telegram and dashboard recommendation messages were one long flat list of 15+ bu
 
 
 
+The manual order ticket now shows the same estimate live as you type — size × price, plus % of equity when connected, updating on price/size changes, order-type toggling (market vs limit), coin switching, and live mid-price ticks for market orders. Deliberately labeled "notional value" rather than showing a margin figure there: the manual ticket has no leverage input, so unlike AI recommendations (where leverage is always known), there's no reliable way to compute actual margin for a manual order — Hyperliquid's per-asset leverage setting isn't something this dashboard tracks. It also turns red and calls out when the entered size falls under Hyperliquid's $10 minimum, before you even hit submit.
+
+## Circuit breaker (drawdown protection)
+
+Suspends all trading — manual and automatic, dashboard and Telegram — and closes everything if account equity drops too far, too fast.
+
+**Why total equity, not idle cash:** a circuit breaker's job is to catch a real deterioration in your capital *before* it gets worse, including damage that's still unrealized in an open position. Watching only idle/withdrawable cash would be blind to exactly the scenario that matters most — a position actively losing money right now. If equity is down 25%, that's genuinely true whether or not anything has been closed yet. This is the standard approach in professional risk systems, and it's deliberate here, not an oversight.
+
+**Why a rolling 24h window, not "since the bot started":** comparing against a fixed starting point would either never reset (making the check meaningless after any single volatile day) or require arbitrary daily resets. Instead, every run records a timestamped equity sample, and the check compares *current* equity against the sample closest to exactly 24 hours ago. Normal intraday position volatility — a position that dipped hard and recovered within a few hours — won't trip it. A sustained decline across a full day will. Tested against five scenarios including that exact "dipped then recovered" case, which correctly does not trip.
+
+**What happens when it trips:**
+1. Every open position gets closed with an aggressive IOC order (wider slippage tolerance than normal — urgency matters more than price here).
+2. Every resting order gets cancelled (including any leftover TP/SL from the fix above).
+3. An unmissable Telegram alert goes out with the exact numbers and what was closed/cancelled.
+4. All trading is blocked at every entry point — confirmed Telegram trades, auto-trade, the dashboard's manual order ticket, its own scan/confirm flow — until manually reset.
+5. The dashboard shows a persistent red banner with a **Reset Circuit Breaker** button. Resetting restarts the 24-hour window from that moment (seeded with current equity), so a legitimate decision to resume doesn't risk an immediate re-trip against a stale baseline.
+
+**Where it lives:** the actual detection and execution happens in `poll_telegram.js`, since that's the only process with both signing capability and a frequent (5-minute) schedule. `scan.js` and the dashboard just read the shared `docs/circuit_breaker.json` file and respect it. The threshold (`CIRCUIT_BREAKER_DRAWDOWN_PCT`, default 25) is configurable as a GitHub Variable or from Settings.
+
+## Leftover TP/SL orders after closing a position
+
+`grouping: 'normalTpsl'` (already in place) makes Hyperliquid auto-cancel the sibling TP or SL order the instant the *other* one triggers — confirmed via Hyperliquid's own docs, which list "canceled due to sibling ordering being filled" as an explicit order status. But that only covers the case where the position closes *because* one of those two orders filled. A manual close (the dashboard's "Close position" button, or Emergency Exit All) is a separate, independent reduce-only order — neither TP nor SL actually triggered, so the exchange has no reason to cancel them, and they're left resting with nothing left to reduce.
+
+Fixed: after any manual close succeeds, the dashboard now checks for and cancels any remaining open orders on that coin. Emergency Exit All already calls the same close function per position, so it's covered automatically too.
+
+## Excluding coins with an open position from new recommendations
+
+Both the backend and the dashboard's manual/auto scan now check current open positions before running any analysis, and skip generating a new recommendation for a coin you're already positioned in. The backend reuses the same account fetch it already makes for the equity pre-check (no extra API call), and the dashboard reuses the positions data it already tracks for the Positions tab. This prevents stacking multiple simultaneous ideas on the same coin, which could otherwise compound risk in ways the per-trade risk settings don't account for.
+
+## "Connected" header but empty Positions/Orders
+
+Found the actual bug: the header badge was set to "Connected" the moment the SDK *object* was constructed — a purely local, synchronous operation with no network call involved, so it basically can never fail. Whether the account's actual data (positions, orders, balances) was successfully fetched was a completely separate step, and a failure there was only ever logged quietly to the activity log — the header had no way of reflecting it, and the Positions/Orders panels have static "No account connected." placeholder text that only gets replaced once the data genuinely loads, so a persistently failing fetch left them stuck on that misleading message indefinitely.
+
+Fixed properly: the badge now only shows "Connected" once the account data has actually been verified as loaded — showing "Connected (no data yet)" if the credentials are valid but the fetch itself failed, and "Connected (data stale)" if it was working and then started failing on a later poll. The Positions/Orders placeholders also now say something accurate and actionable ("Could not load account data — retrying automatically") instead of the misleading "No account connected" when the real issue is a failed fetch, not a configuration problem.
+
+## "Failed to fetch" errors
+
+The confirmed, actual source: `loadCandles()` (the interactive market chart on the main dashboard page) fetches through `infoPost()`, which — like every other Hyperliquid API call in the dashboard — now retries automatically (up to 2 retries with backoff) before surfacing an error. "Failed to fetch" is the generic browser message for any network-level failure, and on a mobile connection that's very often a transient blip, not a real outage; the dashboard was treating every one as final before this fix.
+
+Separately, while investigating, a theoretical CORS risk was identified in the recommendation-chart preview (a `POST` request with a JSON body, which triggers a CORS preflight that QuickChart doesn't uniformly support across all their endpoints) — but this turned out not to be the actual problem in practice; the recommendation and Telegram chart screenshots at 250 candles were working fine as they were. That code path has been reverted to its original form. The one genuine improvement kept from that investigation: the backend now also writes each chart image as a static PNG file (`docs/charts/{id}.png`) alongside `recommendations.json`, and the dashboard prefers loading that same-origin file via a plain `<img>` tag when available — strictly more reliable than a live cross-origin fetch, with no downside, and it doesn't change the 250-candle rendering at all. The original live-render path (POST-based, 250 candles) remains as the fallback for recommendations generated directly in the dashboard, which never go through the backend's file-writing step.
+
+## Mobile: scroll fix wasn't viewport-width-independent
+
+The earlier CSS fix for the clipped ticket only applied inside a `max-width: 860px` media query. If the phone is in landscape orientation, is a larger phone/phablet, or has "Desktop site" mode enabled (common on some Android browsers), the reported viewport width can easily exceed 860px — meaning the fix silently wouldn't apply at all, and the original clipping bug would still be fully in effect. Fixed by making `overflow-y: auto` the **unconditional default** for the relevant containers, not something scoped to a guessed breakpoint — it now can't be skipped by viewport width, orientation, or browser display mode.
+
+## Timestamps on recommendations
+
+Every recommendation now carries a `generated_at` timestamp — this already existed on the backend but was never actually displayed anywhere except the History tab; dashboard-generated recommendations (manual/auto scan) never got one set at all. Both fixed. Shown as relative time ("12m ago") on compact rec cards and the confirm modal for a quick glance, and as an exact timestamp plus relative time in the expanded detail view and History. Telegram messages show an explicit UTC timestamp ("Recommended: 2026-08-24 14:32 UTC") rather than assuming any particular timezone, since that message is generated server-side with no way to know which timezone you're actually in — the dashboard, running in your own browser, shows local time instead.
+
+## Mobile: dashboard struggling to load
+
+Found two real bugs while investigating this:
+
+1. **`boot()` had zero error handling.** It ran `loadMeta()`, `loadMids()`, and `loadCandles()` as sequential, unguarded `await` calls — if any single one failed (far more likely on a flaky mobile connection than on wifi), everything after it silently never ran, including `startPolling()`. No error message, no retry, page just permanently stuck in its initial placeholder state until a manual reload. Fixed: each step is now independently wrapped, a failure in one no longer blocks the others, and `startPolling()` always runs regardless — so a failed first attempt self-heals on the next automatic interval instead of requiring a reload.
+2. **The `hyperliquid` SDK script had no version pin** (`unpkg.com/hyperliquid/dist/browser.global.js` — no `@version`), meaning it silently loaded whatever the *latest* published version happened to be on every page load. If that package ever ships a breaking change, this dashboard would break with zero changes on our end, at an unpredictable time. Pinned to `1.7.3`.
+
+Also made a performance fix while in there: all three CDN scripts (`lightweight-charts`, `hyperliquid`, `xlsx`) were loaded as render-blocking `<script>` tags in `<head>` — the browser had to fully download and execute all three before it could continue parsing the rest of the page, a much bigger tax on a slower mobile connection than on wifi. Now loaded with `defer`, and `boot()` waits for `DOMContentLoaded` (which fires after deferred scripts finish) to guarantee correct ordering.
+
+## Mobile: manual order ticket getting cut off
+
+Found the actual cause: `.main-col` (which holds the chart and the order ticket) had `overflow:hidden` set unconditionally, and the mobile layout override never gave it back a way to scroll — so if the ticket's content ever ran taller than the space available, it was genuinely clipped with no scrollbar, not just visually cramped. Fixed by giving `.main-col` (and `.side-col`) `overflow-y:auto` specifically within the mobile breakpoint, with `-webkit-overflow-scrolling:touch` for smoother scrolling on iOS. If this still doesn't fully resolve it on your specific device/browser, the next thing worth knowing is which one (iOS Safari vs. Chrome, etc.) since mobile viewport-height quirks vary by browser.
+
 ## Funds required (notional vs. margin)
 
 "X% of equity" was always the *notional* position size, not the cash actually locked up — with leverage, the real margin required is notional ÷ leverage, which can be meaningfully smaller. Every recommendation (Telegram, dashboard rec cards, the expanded detail view, and the confirm modal) now shows both explicitly: e.g. "$50.00 notional — cash required up front: ~$16.67 margin at 3x." The backend estimate reads equity once per scan (using the same Unified-Account-aware resolution as everywhere else) via an optional `HL_ACCOUNT_ADDRESS` — just the public address, no key — added to `scan.yml`; if that's not set, the line is simply omitted rather than shown wrong. This is always an estimate: actual execution re-checks live equity and price at confirm time regardless of what this preview showed.
@@ -259,6 +339,7 @@ Telegram and dashboard recommendation messages were one long flat list of 15+ bu
 | `MAX_STOP_LOSS_PCT` | 5 | Max stop-loss distance from entry |
 | `MAX_TAKE_PROFIT_PCT` | 15 | Max take-profit distance from entry |
 | `MAX_ENTRY_DEVIATION_PCT` | 2 | Max deviation between AI-suggested entry and live price, checked both at proposal and execution time |
+| `CIRCUIT_BREAKER_DRAWDOWN_PCT` | 25 | 24h equity drawdown that triggers an emergency close-all and suspends trading |
 | `DEFAULT_TAKE_PROFIT_PCT` | 3 | Flat fallback take-profit %, only used when no AI value and no valid technical target exist |
 | `MAX_POSITION_PCT` | 5 | Max position size as % of equity |
 | `MAX_LEVERAGE` | 3 | Max leverage |
