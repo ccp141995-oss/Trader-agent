@@ -44,6 +44,7 @@ jobs:
           MAX_STOP_LOSS_PCT: ${{ vars.MAX_STOP_LOSS_PCT }}
           MAX_TAKE_PROFIT_PCT: ${{ vars.MAX_TAKE_PROFIT_PCT }}
           MAX_ENTRY_DEVIATION_PCT: ${{ vars.MAX_ENTRY_DEVIATION_PCT }}
+          CIRCUIT_BREAKER_DRAWDOWN_PCT: ${{ vars.CIRCUIT_BREAKER_DRAWDOWN_PCT }}
           EXECUTION_WINDOW_MIN: ${{ vars.EXECUTION_WINDOW_MIN }}
         run: node agent/poll_telegram.js
 
@@ -51,7 +52,7 @@ jobs:
         run: |
           git config user.name "jarvis-trade-agent"
           git config user.email "actions@github.com"
-          git add docs/recommendations.json agent/telegram_offset.json
+          git add docs/recommendations.json agent/telegram_offset.json docs/circuit_breaker.json
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
