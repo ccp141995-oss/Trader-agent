@@ -188,7 +188,7 @@ Separate from the directional bias already in place, every timeframe now also ge
 
 ## Chart screenshots
 
-Every recommendation now includes an actual candlestick chart image — the last 20 x 15m candles with entry/stop/target marked as horizontal lines — so you can visually sanity-check the pattern in a few seconds rather than trusting the text description alone.
+Every recommendation now includes an actual candlestick chart image — the last 250 x 15m candles (~2.5 days) with entry/stop/target marked as horizontal lines — so you can visually sanity-check the pattern in context, not just against a handful of recent bars. The image is rendered wider (1000x450) to keep 250 candles legible rather than compressed into a narrow strip.
 
 **How it's built**: rendered via QuickChart.io (a free, widely-used chart-rendering API) using a POST request — not a GET-encoded URL, which for ~20 candles of OHLC data runs past 4,000 characters and risks silent truncation or rejection by either QuickChart or Telegram. POST has no such limit and returns PNG bytes directly. On the backend, those bytes get uploaded to Telegram via `sendPhoto` as multipart form data (using Node's built-in `FormData`/`Blob`, no extra dependency). On the dashboard, the same POST call returns a blob that becomes a local object URL for inline `<img>` display.
 
@@ -225,6 +225,32 @@ A new toggle — **off by default** — lets confirmed ideas execute without you
 - `poll_telegram.js` still long-polls for that Cancel tap first (same ~4-minute window as normal), and only *after* that window sweeps for anything still pending and marked for auto-trade, executing it through the exact same code path (and the exact same price/stop/take-profit/size/leverage checks) as a manual confirm.
 - Every outcome — executed, failed, or cancelled — still gets the full Telegram report: fill status, account snapshot, or the specific error.
 - Toggle it in Settings (syncs to the backend via the GitHub publish flow) or set `AUTO_TRADE_ENABLED=true` as a GitHub Variable directly.
+
+## Direct chart link
+
+Every recommendation — Telegram, dashboard rec cards, the expanded detail view, History, and the confirm modal — now includes a direct link to that coin's live chart on Hyperliquid (`app.hyperliquid.xyz/trade/{COIN}`). Always mainnet, regardless of which network you're actually scanning or executing on — the real, liquid chart is what's useful to look at.
+
+## Top recommendations per scan
+
+Even when more coins clear the multi-timeframe gate and produce a valid idea, only the **top 2 by confidence** get sent — everything else is dropped before any per-idea work (chart image generation, Telegram sends) happens on it, so nothing is wasted on ideas that won't make the cut. "Confidence" here means the same code-computed confluence score used for conviction (candlestick pattern, chart pattern, indicator agreement, support/resistance, OI momentum, trend strength) — not the model's own self-assessment, and not just whichever ideas happened to come first. This applies identically to AI-researched and technicals-only-fallback cycles, and to both the backend and the dashboard's manual/auto scan.
+
+## Hyperliquid's $10 minimum order value
+
+Hyperliquid rejects any order below $10 notional, exchange-wide, no exceptions — this is what "order has invalid size" usually means in practice, not a precision/decimal issue. It's easy to hit on smaller accounts: a modest suggested size percentage on a small equity base can compute well under $10. This is now handled at three points rather than left to fail at the exchange:
+
+1. **At recommendation time** (`scan.js`) — if the estimated equity and suggested % would produce under $10 notional, the suggested percentage itself gets bumped up before the idea ever reaches Telegram, with a risk flag noting it happened.
+2. **At execution time** (`poll_telegram.js`) — re-checked and bumped again defensively (covers cases where equity changed, or the scan-time estimate wasn't available). If even the account's *entire* equity can't reach $10, it fails clearly with that exact reason instead of a cryptic exchange rejection.
+3. **On the dashboard** — the confirm modal pre-fills a size that already respects the $10 floor, the risk check blocks confirming below it if you edit it down manually, and the manual order ticket validates it too (skipped for reduce-only orders, which close exposure rather than open it).
+
+## Message formatting
+
+Telegram and dashboard recommendation messages were one long flat list of 15+ bullets by this point — reorganized into three clear sections instead: **Setup** (pattern, confluence, trend, chart patterns, support/resistance), **Analysis** (rationale, counterthesis, horizon), and **Trade** (entry/stop/target, sizing, funds required, risk flags). Same information, meaningfully faster to scan.
+
+
+
+## Funds required (notional vs. margin)
+
+"X% of equity" was always the *notional* position size, not the cash actually locked up — with leverage, the real margin required is notional ÷ leverage, which can be meaningfully smaller. Every recommendation (Telegram, dashboard rec cards, the expanded detail view, and the confirm modal) now shows both explicitly: e.g. "$50.00 notional — cash required up front: ~$16.67 margin at 3x." The backend estimate reads equity once per scan (using the same Unified-Account-aware resolution as everywhere else) via an optional `HL_ACCOUNT_ADDRESS` — just the public address, no key — added to `scan.yml`; if that's not set, the line is simply omitted rather than shown wrong. This is always an estimate: actual execution re-checks live equity and price at confirm time regardless of what this preview showed.
 
 ## Configurable risk variables (GitHub Variables)
 
