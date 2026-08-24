@@ -63,7 +63,7 @@
 
   /* ---------- Layout ---------- */
   .layout{display:grid;grid-template-columns:1fr 340px;gap:1px;background:var(--line);height:calc(100vh - 96px);}
-  .main-col, .side-col{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;}
+  .main-col, .side-col{background:var(--bg);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;}
 
   .chart-toolbar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);gap:10px;flex-wrap:wrap;}
   select.coin-select{background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-family:'IBM Plex Mono';font-size:13px;font-weight:600;}
@@ -204,7 +204,7 @@
   @media (max-width: 860px){
     html, body{ height:auto; }
     .layout{ grid-template-columns:1fr; height:auto; }
-    .main-col, .side-col{ min-height:0; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; }
+    .main-col, .side-col{ min-height:0; }
     #chart{ min-height:300px; height:340px; flex:none; }
     .panel-body{ max-height:60vh; }
     .top-row{ padding:8px 12px; gap:8px; }
@@ -758,14 +758,26 @@
     return isoString ? new Date(isoString).toLocaleString() : '';
   }
 
-  async function infoPost(body){
-    const res = await fetch(infoUrl(), {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(body)
-    });
-    if(!res.ok){ throw new Error('info '+body.type+' HTTP '+res.status); }
-    return res.json();
+  async function infoPost(body, attempt){
+    attempt = attempt || 1;
+    try{
+      const res = await fetch(infoUrl(), {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      if(!res.ok){ throw new Error('info '+body.type+' HTTP '+res.status); }
+      return res.json();
+    }catch(e){
+      // "Failed to fetch" is the generic error for any network-level failure — on a mobile
+      // connection that's often just a transient blip, not a real outage, so retry a couple
+      // times with backoff before actually surfacing it as an error.
+      if(attempt < 3){
+        await new Promise(r => setTimeout(r, attempt * 800));
+        return infoPost(body, attempt + 1);
+      }
+      throw e;
+    }
   }
 
   // ---------------- Chart ----------------
@@ -898,16 +910,31 @@
 
   // ---------------- Account: positions / orders / balances ----------------
   async function loadAccountState(){
-    if(!cfg.address) return;
+    if(!cfg.address) return false;
+    let positionsOk = false, ordersOk = false;
     try{
       const state = await infoPost({ type:'clearinghouseState', user: cfg.address });
       renderPositions(state);
       renderBalances(state);
-    }catch(e){ log('Account state failed: '+e.message, 'err'); }
+      positionsOk = true;
+    }catch(e){
+      log('Account state failed: '+e.message, 'err');
+      const el = document.getElementById('positionsList');
+      if(el && el.innerHTML.includes('No account connected')){
+        el.innerHTML = '<div class="empty-state">Could not load account data (' + e.message + ') — retrying automatically.</div>';
+      }
+    }
     try{
       const orders = await infoPost({ type:'openOrders', user: cfg.address });
       renderOrders(orders);
-    }catch(e){ log('Open orders failed: '+e.message, 'err'); }
+      ordersOk = true;
+    }catch(e){
+      log('Open orders failed: '+e.message, 'err');
+      const el = document.getElementById('view-orders');
+      if(el && el.innerHTML.includes('No account connected')){
+        el.innerHTML = '<div class="empty-state">Could not load orders (' + e.message + ') — retrying automatically.</div>';
+      }
+    }
     try{
       const spotUsdc = await loadSpotUsdcBalance();
       if(spotUsdc !== null){
@@ -915,6 +942,7 @@
         document.getElementById('spotBalanceValue').textContent = fmtUsd(spotUsdc);
       }
     }catch(e){ /* non-critical, header chip just stays hidden */ }
+    return positionsOk && ordersOk;
   }
 
   async function loadSpotUsdcBalance(){
@@ -1604,20 +1632,6 @@
     };
   }
 
-  async function fetchChartImageObjectUrl(config){
-    if(!config) return null;
-    try{
-      const res = await fetch('https://quickchart.io/chart', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chart: config, width: 1000, height: 450, backgroundColor: '#0d1117', version: '3' })
-      });
-      if(!res.ok) return null;
-      const blob = await res.blob();
-      return URL.createObjectURL(blob);
-    }catch(e){ return null; }
-  }
-
   async function loadTimeframeTechnicals(coin, interval){
     try{
       const endTime = Date.now();
@@ -2262,13 +2276,33 @@
   async function loadChartIntoHolder(rec, holderId){
     const holder = document.getElementById(holderId);
     if(!holder) return;
+
+    // Prefer the static PNG the backend commits alongside the recommendation — a plain <img>
+    // tag loading a same-origin file, with no fetch call, no CORS exposure, and no URL-length
+    // concern at all. This covers every backend-sourced recommendation.
+    if(rec.chart_image_path){
+      holder.innerHTML = '<img src="'+rec.chart_image_path+'" style="width:100%;border-radius:6px;margin-top:8px;display:block;" '
+        + 'onerror="this.parentElement.innerHTML=\'<div style=&quot;color:var(--muted-2);font-size:10.5px;margin-top:6px;&quot;>Chart image not found.</div>\'">';
+      return;
+    }
+
+    // Fallback for recommendations generated directly in the dashboard (manual/auto scan),
+    // which never go through the backend's file-writing step. A GET request with a trimmed
+    // candle count keeps the URL short enough to be safe, and <img src> loading a cross-origin
+    // image is never subject to CORS restrictions — unlike the POST-based render this used to
+    // do, which depends on QuickChart sending correct CORS headers for a non-simple request
+    // and can fail outright as "Failed to fetch" if it doesn't.
     if(!rec.chart_candles){ holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">No chart data saved for this recommendation.</div>'; return; }
     holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Loading chart…</div>';
-    const config = buildChartConfig(rec.coin, rec.chart_candles, rec.entry_price, rec.stop_loss_price, rec.take_profit_price);
-    const url = await fetchChartImageObjectUrl(config);
-    holder.innerHTML = url
-      ? '<img src="'+url+'" style="width:100%;border-radius:6px;margin-top:8px;display:block;">'
-      : '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Chart unavailable (QuickChart unreachable).</div>';
+    const trimmed = {
+      opens: rec.chart_candles.opens.slice(-40), highs: rec.chart_candles.highs.slice(-40),
+      lows: rec.chart_candles.lows.slice(-40), closes: rec.chart_candles.closes.slice(-40)
+    };
+    const config = buildChartConfig(rec.coin, trimmed, rec.entry_price, rec.stop_loss_price, rec.take_profit_price);
+    if(!config){ holder.innerHTML = '<div style="color:var(--muted-2);font-size:10.5px;margin-top:6px;">Chart unavailable.</div>'; return; }
+    const url = 'https://quickchart.io/chart?c=' + encodeURIComponent(JSON.stringify(config)) + '&width=1000&height=450&backgroundColor=%230d1117&version=3';
+    holder.innerHTML = '<img src="'+url+'" style="width:100%;border-radius:6px;margin-top:8px;display:block;" '
+      + 'onerror="this.parentElement.innerHTML=\'<div style=&quot;color:var(--muted-2);font-size:10.5px;margin-top:6px;&quot;>Chart unavailable (QuickChart unreachable).</div>\'">';
   }
 
   function renderRecommendations(){
@@ -2751,6 +2785,7 @@
       document.getElementById('netBadge').textContent = 'Disconnected';
       return;
     }
+    const badge = document.getElementById('netBadge');
     try{
       sdk = new HyperliquidSDK.Hyperliquid({
         enableWs: false,
@@ -2760,12 +2795,23 @@
       });
       connected = true;
       document.getElementById('liveDot').classList.add('live');
-      const badge = document.getElementById('netBadge');
-      badge.textContent = cfg.network === 'mainnet' ? 'Mainnet · Connected' : 'Testnet · Connected';
+      badge.textContent = (cfg.network === 'mainnet' ? 'Mainnet' : 'Testnet') + ' · Verifying…';
       badge.className = 'badge ' + (cfg.network === 'mainnet' ? 'mainnet' : 'testnet');
-      log('Connected as '+cfg.address.slice(0,6)+'…'+cfg.address.slice(-4)+' on '+cfg.network, 'ok');
-      loadAccountState();
+      log('Wallet configured as '+cfg.address.slice(0,6)+'…'+cfg.address.slice(-4)+' on '+cfg.network+' — verifying data access…', 'ok');
+
+      // The SDK object above only proves the credentials were syntactically valid — it never
+      // makes a network call. "Connected" should mean the account's actual data was retrieved,
+      // not just that a local object was constructed successfully.
+      const dataOk = await loadAccountState();
+      if(dataOk){
+        badge.textContent = (cfg.network === 'mainnet' ? 'Mainnet' : 'Testnet') + ' · Connected';
+        log('Connected — account data loaded successfully.', 'ok');
+      } else {
+        badge.textContent = (cfg.network === 'mainnet' ? 'Mainnet' : 'Testnet') + ' · Connected (no data yet)';
+        log('Wallet is configured, but the account data fetch failed — check the Positions/Orders tabs, and the connection will keep retrying automatically every 5 seconds.', 'err');
+      }
     }catch(e){
+      badge.textContent = 'Disconnected';
       log('Connection failed: ' + e.message, 'err');
     }
   }
@@ -2774,7 +2820,15 @@
     pollTimers.forEach(t => clearInterval(t));
     pollTimers = [];
     pollTimers.push(setInterval(loadMids, 3000));
-    pollTimers.push(setInterval(()=>{ if(cfg.address) loadAccountState(); }, 5000));
+    pollTimers.push(setInterval(async ()=>{
+      if(!cfg.address || !connected) return;
+      const dataOk = await loadAccountState();
+      const badge = document.getElementById('netBadge');
+      const netLabel = cfg.network === 'mainnet' ? 'Mainnet' : 'Testnet';
+      const nowShowingOk = badge.textContent === netLabel + ' · Connected';
+      if(dataOk && !nowShowingOk) badge.textContent = netLabel + ' · Connected';
+      else if(!dataOk && nowShowingOk) badge.textContent = netLabel + ' · Connected (data stale)';
+    }, 5000));
     pollTimers.push(setInterval(loadCandles, 15000));
     pollTimers.push(setInterval(autoScanTick, 120000));
     pollTimers.push(setInterval(pollBackendFeed, 60000));
