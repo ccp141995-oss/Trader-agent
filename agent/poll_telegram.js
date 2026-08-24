@@ -25,6 +25,7 @@ let MAX_LEVERAGE = MAX_LEVERAGE_DEFAULT;
 let DEFAULT_TAKE_PROFIT_PCT = DEFAULT_TAKE_PROFIT_PCT_DEFAULT;
 let MAX_STOP_LOSS_PCT = MAX_STOP_LOSS_PCT_DEFAULT;
 let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
+const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
 let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
 const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180');
 
@@ -213,7 +214,15 @@ async function executeTrade(rec){
 
   const pctEquity = Math.min(rec.suggested_size_pct_equity || MAX_POSITION_PCT, MAX_POSITION_PCT);
   const leverage = Math.min(rec.suggested_leverage || 1, MAX_LEVERAGE);
-  const notional = equity * (pctEquity / 100);
+  let notional = equity * (pctEquity / 100);
+  let sizeBumped = false;
+  if(notional < MIN_ORDER_NOTIONAL){
+    if(equity < MIN_ORDER_NOTIONAL){
+      throw new Error(`Account equity ($${equity.toFixed(2)}) is below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value — no position size is possible on this account right now.`);
+    }
+    notional = MIN_ORDER_NOTIONAL;
+    sizeBumped = true;
+  }
   const size = notional / currentMid;
   if(!size || size <= 0) throw new Error('Computed size was zero — check account equity and risk settings');
 
@@ -253,25 +262,26 @@ async function executeTrade(rec){
   });
 
   const result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
-  return { result, size, entryPx, leverage, pctEquity };
+  return { result, size, entryPx, leverage, pctEquity, sizeBumped };
 }
 
 async function executeAndReport(rec, labelPrefix){
   rec.status = 'processing';
   await editStatusMessage(rec, `⏳ ${rec.coin} ${rec.direction} — ${labelPrefix}, checking current price and risk limits before placing…`);
   try{
-    const { size, entryPx, leverage, pctEquity, result } = await executeTrade(rec);
+    const { size, entryPx, leverage, pctEquity, sizeBumped, result } = await executeTrade(rec);
     rec.status = 'executed';
     rec.executed_at = new Date().toISOString();
 
     const labels = ['Entry', 'Stop-loss'].concat(rec.take_profit_price ? ['Take-profit'] : []);
     const fillLines = describeOrderResult(result, labels).join('\n');
     const snapshot = await getAccountSnapshot();
+    const bumpNote = sizeBumped ? `\n• Note: size increased to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value` : '';
 
     await editStatusMessage(rec,
       `✅ ${rec.coin} ${rec.direction} — executed on ${HL_EXEC_NETWORK}\n\n`
       + `• Target size: ${size.toFixed(5)} @ ~$${entryPx.toFixed(2)}\n`
-      + `• Leverage: ${leverage}x (${pctEquity.toFixed(1)}% of equity)\n`
+      + `• Leverage: ${leverage}x (${pctEquity.toFixed(1)}% of equity)${bumpNote}\n`
       + `${fillLines}\n\n`
       + `${snapshot}`
     );

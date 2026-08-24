@@ -13,6 +13,12 @@ const fs = require('fs');
 const path = require('path');
 
 const HL_NETWORK = (process.env.HL_NETWORK || 'mainnet').toLowerCase();
+
+function hyperliquidChartUrl(coin){
+  // Always mainnet — the real, liquid chart is what's actually useful to look at, regardless
+  // of which network the scan or execution is running on.
+  return `https://app.hyperliquid.xyz/trade/${coin}`;
+}
 const INFO_URL = HL_NETWORK === 'testnet' ? 'https://api.hyperliquid-testnet.xyz/info' : 'https://api.hyperliquid.xyz/info';
 const WATCHLIST_DEFAULT = (process.env.WATCHLIST || 'BTC,ETH,SOL,HYPE').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 let WATCHLIST = WATCHLIST_DEFAULT;
@@ -32,6 +38,8 @@ const EXECUTION_WINDOW_MIN = parseFloat(process.env.EXECUTION_WINDOW_MIN || '180
 let MAX_STOP_LOSS_PCT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
 let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
 let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
+const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
+const MAX_RECS_PER_SCAN = 2; // keep only the top-N by confidence, even if more candidates qualify
 let MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
 let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
 let DEFAULT_TAKE_PROFIT_PCT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
@@ -1073,36 +1081,44 @@ function formatTelegramMessage(rec){
   const dir = rec.direction === 'short' ? 'SHORT' : 'LONG';
   const confirming = (rec.indicators_confirming || []).length ? rec.indicators_confirming.join(', ') : '—';
   const fallbackNote = rec.source === 'backend-fallback' ? '\n🔧 Technicals-only this cycle (AI unavailable or off).' : '';
-  const consistencyNote = rec.self_consistent ? ' · verified on independent re-check' : '';
+  const consistencyNote = rec.self_consistent ? ' · verified 2x' : '';
 
   const lines = [];
-  lines.push(`🤖 JARVIS Trade Agent — ${rec.coin} ${dir} (${rec.conviction || 'low'} conviction, ${rec.confluence_score != null ? rec.confluence_score + '/8 factors' : 'n/a'}${consistencyNote})${fallbackNote}`);
-  if(rec.trend_strength) lines.push(`• Trend: ${rec.trend_strength} (ADX14)`);
+  lines.push(`🤖 JARVIS — ${rec.coin} ${dir}`);
+  lines.push(`${rec.conviction || 'low'} conviction · ${rec.confluence_score != null ? rec.confluence_score + '/8 factors' : 'n/a'}${consistencyNote}${rec.trend_strength ? ' · ' + rec.trend_strength + ' trend' : ''}${fallbackNote}`);
+
   lines.push('');
+  lines.push('SETUP');
   lines.push(`• Pattern: ${rec.pattern || '—'}`);
   lines.push(`• Confirming: ${confirming}`);
   if((rec.confluence_factors || []).length) lines.push(`• Confluence: ${rec.confluence_factors.join(', ')}`);
-  lines.push(`• Why: ${rec.rationale || '—'}`);
-  if(rec.counterthesis) lines.push(`• Risk to this idea: ${rec.counterthesis}`);
-  if(rec.counterthesis_response) lines.push(`• Still valid because: ${rec.counterthesis_response}`);
-  lines.push(`• Horizon: ${rec.time_horizon || '—'}`);
-  lines.push(`• Entry ~$${rec.entry_price} · Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : ''));
-
+  if((rec.chart_patterns || []).length){
+    lines.push('• Chart pattern: ' + rec.chart_patterns.map(cp => cp.name + (cp.neckline ? ` (neckline $${cp.neckline}${cp.confirmed ? ', confirmed' : ''})` : '')).join(', '));
+  }
   if((rec.resistance_levels || []).length){
     lines.push('• Resistance: ' + rec.resistance_levels.map(l => `$${l.price} (${l.tests}x touched)`).join(', '));
   }
   if((rec.support_levels || []).length){
     lines.push('• Support: ' + rec.support_levels.map(l => `$${l.price} (${l.tests}x touched)`).join(', '));
   }
-  if((rec.chart_patterns || []).length){
-    lines.push('• Chart pattern: ' + rec.chart_patterns.map(cp => cp.name + (cp.neckline ? ` (neckline $${cp.neckline}${cp.confirmed ? ', confirmed' : ''})` : '')).join(', '));
-  }
 
+  lines.push('');
+  lines.push('ANALYSIS');
+  lines.push(`• Why: ${rec.rationale || '—'}`);
+  if(rec.counterthesis) lines.push(`• Risk: ${rec.counterthesis}`);
+  if(rec.counterthesis_response) lines.push(`• Still valid because: ${rec.counterthesis_response}`);
+  lines.push(`• Horizon: ${rec.time_horizon || '—'}`);
+
+  lines.push('');
+  lines.push('TRADE');
+  lines.push(`• Entry ~$${rec.entry_price} · Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : ''));
   lines.push(`• Size: ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (capped by your limits at execution)`);
   if(rec.estimated_notional != null && rec.estimated_margin != null){
-    lines.push(`• Est. position value: $${rec.estimated_notional.toFixed(2)} notional — cash required up front: ~$${rec.estimated_margin.toFixed(2)} margin at ${rec.suggested_leverage}x`);
+    lines.push(`• Est. value: $${rec.estimated_notional.toFixed(2)} notional — cash required: ~$${rec.estimated_margin.toFixed(2)} margin`);
   }
   if((rec.risk_flags || []).length) lines.push(`• Flags: ${rec.risk_flags.join(', ')}`);
+  if(rec.hyperliquid_url) lines.push(`• Chart: ${rec.hyperliquid_url}`);
+
   lines.push('');
   if(rec.auto_trade){
     lines.push(`⚡ Auto-trade is ON — this executes automatically in a few minutes unless you tap Cancel below.`);
@@ -1227,6 +1243,16 @@ async function main(){
     newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; });
   }
 
+  // Rank by our own computed confluence score (not the model's self-assessed conviction label)
+  // and keep only the strongest candidates — done before any per-rec work below (chart images,
+  // Telegram sends) so nothing gets wasted on ideas that won't make the cut.
+  if(newRecs.length > MAX_RECS_PER_SCAN){
+    newRecs.sort((a,b) => (b.confluence_score || 0) - (a.confluence_score || 0));
+    const dropped = newRecs.slice(MAX_RECS_PER_SCAN).map(r => r.coin + ' (' + (r.confluence_score||0) + '/8)');
+    newRecs = newRecs.slice(0, MAX_RECS_PER_SCAN);
+    console.log(`Capped to top ${MAX_RECS_PER_SCAN} by confidence — dropped: ${dropped.join(', ')}`);
+  }
+
   // Attach the 15m support/resistance and chart-pattern readout to each rec so it can be
   // relayed downstream (Telegram, dashboard) without needing to recompute it.
   newRecs.forEach(rec => {
@@ -1236,15 +1262,27 @@ async function main(){
       rec.support_levels = (t.supportLevels || []).map(l => ({ price: parseFloat(l.price.toFixed(2)), tests: l.tests }));
       rec.chart_patterns = t.chartPatterns || [];
     }
+    rec.hyperliquid_url = hyperliquidChartUrl(rec.coin);
   });
 
   // Funds-required estimate: "X% of equity" is the notional position size, not the cash locked —
   // actual margin required is notional / leverage, which can be a meaningfully smaller number.
   // Fetched once per run and estimated here; execution always re-checks live equity itself.
+  //
+  // Hyperliquid rejects any order below $10 notional outright ("invalid size"). A small account
+  // combined with a conservative suggested % can easily compute below that floor, so the
+  // suggested % itself gets bumped up here — before it ever reaches Telegram — rather than
+  // silently failing at execution or (worse) confusingly rejecting with no explanation.
   const estimatedEquity = await loadEstimatedEquity();
   newRecs.forEach(rec => {
     if(estimatedEquity && rec.suggested_size_pct_equity && rec.suggested_leverage){
-      const notional = estimatedEquity * (rec.suggested_size_pct_equity / 100);
+      let notional = estimatedEquity * (rec.suggested_size_pct_equity / 100);
+      if(notional < MIN_ORDER_NOTIONAL && estimatedEquity > 0){
+        const bumpedPct = (MIN_ORDER_NOTIONAL / estimatedEquity) * 100;
+        rec.suggested_size_pct_equity = parseFloat(bumpedPct.toFixed(2));
+        notional = MIN_ORDER_NOTIONAL;
+        rec.risk_flags = (rec.risk_flags || []).concat([`size increased to meet Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value`]);
+      }
       rec.estimated_notional = notional;
       rec.estimated_margin = notional / rec.suggested_leverage;
     }
