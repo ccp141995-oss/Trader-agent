@@ -52,6 +52,7 @@ function shortId(){
 
 const STATE_PATH = path.join(__dirname, 'state.json');
 const FEED_PATH = path.join(__dirname, '..', 'docs', 'recommendations.json');
+const CHARTS_DIR = path.join(__dirname, '..', 'docs', 'charts');
 const SHARED_CONFIG_PATH = path.join(__dirname, '..', 'docs', 'agent-config.json');
 
 function loadSharedConfig(){
@@ -1337,8 +1338,8 @@ async function main(){
 
     const t15 = technicals[rec.coin];
     if(t15 && t15.recentCandles){
-      // Persist the compact candle data (not the rendered image) so the dashboard and history
-      // log can re-render the same chart later without needing the full technicals object.
+      // Persist the compact candle data too (not just the rendered image) so a dashboard-side
+      // fallback render is still possible for recs that predate this, or if the file write fails.
       rec.chart_candles = t15.recentCandles;
       const chartConfig = buildChartConfig(rec.coin, t15.recentCandles, rec.entry_price, rec.stop_loss_price, rec.take_profit_price);
       const chartBuffer = await fetchChartImageBuffer(chartConfig);
@@ -1346,6 +1347,17 @@ async function main(){
         const sent = await sendTelegramPhotoBuffer(chartBuffer, `${rec.coin} ${rec.direction === 'short' ? 'SHORT' : 'LONG'} — ${rec.pattern || ''}`.slice(0,200));
         rec.chart_image_sent = sent;
         if(!sent) console.error(`Chart image failed to send for ${rec.coin} — continuing with the text message anyway.`);
+
+        // Also write the PNG as a static file the dashboard can load same-origin — no CORS,
+        // no giant data-URL, no runtime dependency on QuickChart being reachable from the
+        // person's browser at all. This is the version the dashboard should always prefer.
+        try{
+          if(!fs.existsSync(CHARTS_DIR)) fs.mkdirSync(CHARTS_DIR, { recursive: true });
+          fs.writeFileSync(path.join(CHARTS_DIR, rec.id + '.png'), chartBuffer);
+          rec.chart_image_path = 'charts/' + rec.id + '.png';
+        }catch(e){
+          console.error('Could not write chart image file (dashboard will fall back to live rendering):', e.message);
+        }
       } else {
         console.error(`Chart image render failed for ${rec.coin} (QuickChart unreachable or errored) — continuing with the text message anyway.`);
         rec.chart_image_sent = false;
@@ -1367,9 +1379,18 @@ async function main(){
     }
   }
 
+  const trimmedOut = (feed.recommendations || []).slice(30);
   feed.recommendations = newRecs.concat(feed.recommendations || []).slice(0, 30);
   writeJson(FEED_PATH, feed);
   writeJson(STATE_PATH, state);
+
+  // Delete chart image files for recs that just aged out of the feed, so docs/charts/ doesn't
+  // grow unbounded in the git repo over time.
+  trimmedOut.forEach(rec => {
+    if(rec.chart_image_path){
+      try{ fs.unlinkSync(path.join(__dirname, '..', 'docs', rec.chart_image_path)); }catch(e){ /* already gone or never wrote */ }
+    }
+  });
 
   console.log('Done.');
 }
