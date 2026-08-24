@@ -1,16 +1,16 @@
 {
   "watchlist": "BTC,ETH,SOL,HYPE",
-  "scanMode": "filtered",
-  "filteredTopN": 50,
-  "filteredMinOI": 100000,
-  "filteredMinVolume24h": 200000,
-  "maxPositionPct": 14,
-  "maxLeverage": 10,
-  "defaultTakeProfitPct": 50,
-  "maxStopLossPct": 20,
-  "maxTakeProfitPct": 150,
+  "scanMode": "watchlist",
+  "filteredTopN": 20,
+  "filteredMinOI": 1000000,
+  "filteredMinVolume24h": 2000000,
+  "maxPositionPct": 5,
+  "maxLeverage": 3,
+  "defaultTakeProfitPct": 3,
+  "maxStopLossPct": 5,
+  "maxTakeProfitPct": 15,
   "maxEntryDeviationPct": 2,
   "aiResearchEnabled": true,
   "autoTradeEnabled": false,
-  "updated_at": "2026-08-23T21:28:19.294Z"
+  "updated_at": null
 }

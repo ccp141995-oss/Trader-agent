@@ -670,6 +670,8 @@
   let pollTimers = [];
   let recommendations = [];
   let lastAccountValue = null;
+  const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
+  const MAX_RECS_PER_SCAN = 2; // keep only the top-N by confidence, even if more candidates qualify
   let lastWithdrawable = null;
   let lastPositions = [];
   let dismissedIds = JSON.parse(localStorage.getItem('hlDash_dismissedRecIds') || '[]');
@@ -679,6 +681,11 @@
   const TAPE_COINS = ['BTC','ETH','SOL','HYPE','ARB','DOGE'];
 
   function infoUrl(){ return cfg.network === 'mainnet' ? 'https://api.hyperliquid.xyz/info' : 'https://api.hyperliquid-testnet.xyz/info'; }
+  function hyperliquidChartUrl(coin){
+    // Always mainnet — the real, liquid chart is what's actually useful to look at, regardless
+    // of whether the dashboard's own Network toggle is set to testnet.
+    return `https://app.hyperliquid.xyz/trade/${coin}`;
+  }
 
   function log(msg, kind){
     const box = document.getElementById('logBox');
@@ -1003,6 +1010,12 @@
         limitPx = parseFloat(document.getElementById('priceInput').value);
         if(!limitPx || limitPx <= 0){ log('Enter a valid limit price', 'err'); return; }
         tif = document.getElementById('tifInput').value;
+      }
+
+      const estNotional = sz * limitPx;
+      if(!reduceOnly && estNotional < MIN_ORDER_NOTIONAL){
+        log('Order value is $'+estNotional.toFixed(2)+', below Hyperliquid\'s $'+MIN_ORDER_NOTIONAL+' minimum — increase size or price.', 'err');
+        return;
       }
 
       const takeProfitInput = parseFloat(document.getElementById('ticketTakeProfit').value);
@@ -2062,8 +2075,19 @@
       } else {
         newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; rec.source = 'manual-fallback'; });
       }
+
+      // Rank by our own computed confluence score and keep only the strongest candidates —
+      // same cap as the backend, applied before chart image generation for dropped ideas.
+      if(newRecs.length > MAX_RECS_PER_SCAN){
+        newRecs.sort((a,b) => (b.confluence_score || 0) - (a.confluence_score || 0));
+        const dropped = newRecs.slice(MAX_RECS_PER_SCAN).map(r => r.coin + ' (' + (r.confluence_score||0) + '/8)');
+        newRecs = newRecs.slice(0, MAX_RECS_PER_SCAN);
+        log('Capped to top ' + MAX_RECS_PER_SCAN + ' by confidence — dropped: ' + dropped.join(', '), '');
+      }
+
       newRecs.forEach(rec => { if(!rec.id) rec.id = rec.coin + '-' + Date.now() + '-' + Math.random().toString(36).slice(2,7); });
       newRecs.forEach(rec => { if(technicals[rec.coin] && technicals[rec.coin].recentCandles) rec.chart_candles = technicals[rec.coin].recentCandles; });
+      newRecs.forEach(rec => { rec.hyperliquid_url = hyperliquidChartUrl(rec.coin); });
 
       recordHistory(newRecs);
       recommendations = newRecs.concat(recommendations).slice(0, 10);
@@ -2113,20 +2137,33 @@
   }
 
   function renderFullDetailHtml(r){
-    const lines = [];
-    lines.push('Rationale: ' + (r.rationale || '—'));
-    if(r.counterthesis) lines.push('Risk to this idea: ' + r.counterthesis);
-    if(r.counterthesis_response) lines.push('Still valid because: ' + r.counterthesis_response);
-    lines.push('Confluence: ' + ((r.confluence_factors && r.confluence_factors.length) ? r.confluence_factors.join(', ') : '—') + ' (' + (r.confluence_score != null ? r.confluence_score + '/8' : 'n/a') + ')');
-    if(r.trend_strength) lines.push('Trend: ' + r.trend_strength + ' (ADX14)');
-    if((r.resistance_levels || []).length) lines.push('Resistance: ' + r.resistance_levels.map(l => '$'+l.price+' ('+l.tests+'x)').join(', '));
-    if((r.support_levels || []).length) lines.push('Support: ' + r.support_levels.map(l => '$'+l.price+' ('+l.tests+'x)').join(', '));
-    if((r.chart_patterns || []).length) lines.push('Chart patterns: ' + r.chart_patterns.map(cp => cp.name + (cp.neckline ? ' (neckline $'+cp.neckline+(cp.confirmed?', confirmed':'')+')' : '')).join(', '));
-    lines.push('Entry $'+fmtNum(r.entry_price,2)+' · Stop $'+fmtNum(r.stop_loss_price,2)+(r.take_profit_price?' · Target $'+fmtNum(r.take_profit_price,2):''));
+    const sectionTitle = (t) => '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:10px 0 4px;">'+t+'</div>';
+    const setup = [];
+    setup.push('Pattern: ' + (r.pattern || '—'));
+    if((r.indicators_confirming || []).length) setup.push('Confirming: ' + r.indicators_confirming.join(', '));
+    if((r.confluence_factors || []).length) setup.push('Confluence: ' + r.confluence_factors.join(', ') + ' (' + (r.confluence_score != null ? r.confluence_score + '/8' : 'n/a') + ')');
+    if(r.trend_strength) setup.push('Trend: ' + r.trend_strength + ' (ADX14)');
+    if((r.chart_patterns || []).length) setup.push('Chart patterns: ' + r.chart_patterns.map(cp => cp.name + (cp.neckline ? ' (neckline $'+cp.neckline+(cp.confirmed?', confirmed':'')+')' : '')).join(', '));
+    if((r.resistance_levels || []).length) setup.push('Resistance: ' + r.resistance_levels.map(l => '$'+l.price+' ('+l.tests+'x)').join(', '));
+    if((r.support_levels || []).length) setup.push('Support: ' + r.support_levels.map(l => '$'+l.price+' ('+l.tests+'x)').join(', '));
+
+    const analysis = [];
+    analysis.push('Why: ' + (r.rationale || '—'));
+    if(r.counterthesis) analysis.push('Risk: ' + r.counterthesis);
+    if(r.counterthesis_response) analysis.push('Still valid because: ' + r.counterthesis_response);
+    if(r.time_horizon) analysis.push('Horizon: ' + r.time_horizon);
+
+    const trade = [];
+    trade.push('Entry $'+fmtNum(r.entry_price,2)+' · Stop $'+fmtNum(r.stop_loss_price,2)+(r.take_profit_price?' · Target $'+fmtNum(r.take_profit_price,2):''));
     const est = estimateFundsRequired(r);
-    if(est) lines.push('Est. position value: $'+est.notional.toFixed(2)+' notional — cash required up front: ~$'+est.margin.toFixed(2)+' margin at '+r.suggested_leverage+'x');
-    if(r.risk_flags && r.risk_flags.length) lines.push('Risk flags: ' + r.risk_flags.join(', '));
-    return '<div style="font-size:11.5px;line-height:1.7;color:var(--text);white-space:pre-line;">' + lines.join('\n') + '</div>';
+    if(est) trade.push('Est. value: $'+est.notional.toFixed(2)+' notional — cash required: ~$'+est.margin.toFixed(2)+' margin');
+    if(r.risk_flags && r.risk_flags.length) trade.push('Flags: ' + r.risk_flags.join(', '));
+    if(r.hyperliquid_url) trade.push('<a href="'+r.hyperliquid_url+'" target="_blank" rel="noopener" style="color:var(--mint);">View '+r.coin+' chart on Hyperliquid ↗</a>');
+
+    const style = 'font-size:11.5px;line-height:1.7;color:var(--text);white-space:pre-line;';
+    return sectionTitle('Setup') + '<div style="'+style+'">' + setup.join('\n') + '</div>'
+      + sectionTitle('Analysis') + '<div style="'+style+'">' + analysis.join('\n') + '</div>'
+      + sectionTitle('Trade') + '<div style="'+style+'">' + trade.join('\n') + '</div>';
   }
 
   async function loadChartIntoHolder(rec, holderId){
@@ -2166,12 +2203,14 @@
       const autoTag = r.auto_trade ? '<span class="conviction medium" style="margin-left:4px;">⚡ auto-trade</span>' : '';
       const est = estimateFundsRequired(r);
       const fundsLine = est ? '<div class="rec-horizon">Cash required: ~$'+est.margin.toFixed(2)+' margin ($'+est.notional.toFixed(2)+' notional)</div>' : '';
+      const chartLink = r.hyperliquid_url ? '<div class="rec-horizon"><a href="'+r.hyperliquid_url+'" target="_blank" rel="noopener" style="color:var(--mint);">View '+r.coin+' chart on Hyperliquid ↗</a></div>' : '';
       return '<div class="rec-card">'
         + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
         + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+confluenceTag+consistencyTag+autoTag+sourceTag+statusBadge+'</span></div>'
         + '<div class="rec-catalyst"><b>'+(r.pattern||'Pattern n/a')+'</b>'+((r.indicators_confirming&&r.indicators_confirming.length)?' — '+r.indicators_confirming.join(', '):'')+'</div>'
         + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+'</div>'
         + fundsLine
+        + chartLink
         + actions
         + '<div id="rec-detail-'+i+'" style="display:none;margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px;"></div>'
         + '</div>';
@@ -2298,8 +2337,8 @@
   function openConfirmModal(rec){
     document.getElementById('executeStatusBox').style.display = 'none';
     document.getElementById('placeConfirmedTrade').textContent = 'Confirm & Place Trade';
-    document.getElementById('confirmTitle').textContent = rec.coin + ' — ' + (rec.direction === 'long' ? 'Long' : 'Short') + ' (' + (rec.conviction||'low') + ' conviction, ' + (rec.confluence_score != null ? rec.confluence_score+'/7 factors' : 'n/a') + ')';
-    document.getElementById('confirmSub').textContent = rec.time_horizon || '';
+    document.getElementById('confirmTitle').textContent = rec.coin + ' — ' + (rec.direction === 'long' ? 'Long' : 'Short') + ' (' + (rec.conviction||'low') + ' conviction, ' + (rec.confluence_score != null ? rec.confluence_score+'/8 factors' : 'n/a') + ')';
+    document.getElementById('confirmSub').innerHTML = (rec.time_horizon || '') + (rec.hyperliquid_url ? ' · <a href="'+rec.hyperliquid_url+'" target="_blank" rel="noopener" style="color:var(--mint);">View chart ↗</a>' : '');
     document.getElementById('confirmRationale').textContent =
       'Pattern: ' + (rec.pattern || '—') + '\n'
       + 'Confirming indicators: ' + ((rec.indicators_confirming && rec.indicators_confirming.length) ? rec.indicators_confirming.join(', ') : '—') + '\n'
@@ -2322,7 +2361,8 @@
 
     const equity = lastAccountValue || 0;
     const pctEquity = Math.min(rec.suggested_size_pct_equity || cfg.maxPositionPct, cfg.maxPositionPct);
-    const notional = equity * (pctEquity/100);
+    let notional = equity * (pctEquity/100);
+    if(notional > 0 && notional < MIN_ORDER_NOTIONAL) notional = MIN_ORDER_NOTIONAL;
     const size = rec.entry_price ? (notional / rec.entry_price) : 0;
     document.getElementById('confSize').value = size ? size.toFixed(5) : '';
 
@@ -2351,6 +2391,9 @@
     if(equity && pctOfEquity > cfg.maxPositionPct + 0.01) problems.push('Exceeds max position size ('+cfg.maxPositionPct+'% of equity).');
     if(leverage > cfg.maxLeverage + 0.01) problems.push('Exceeds max leverage ('+cfg.maxLeverage+'x).');
     if(!size || !entryPx) problems.push('Entry price and size are required.');
+    if(size && entryPx && notional > 0 && notional < MIN_ORDER_NOTIONAL){
+      problems.push('Order value is $'+notional.toFixed(2)+', below Hyperliquid\'s $'+MIN_ORDER_NOTIONAL+' minimum — increase size.');
+    }
     if(stopLoss && entryPx){
       const stopDistPct = Math.abs(entryPx - stopLoss) / entryPx * 100;
       if(stopDistPct > cfg.maxStopLossPct + 0.01) problems.push('Stop is '+stopDistPct.toFixed(1)+'% from entry, exceeds max stop-loss distance ('+cfg.maxStopLossPct+'%).');
