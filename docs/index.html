@@ -76,15 +76,15 @@
 
   #chart{flex:1;min-height:280px;}
 
-  .ticket{border-top:1px solid var(--line);padding:14px;background:var(--panel);}
+  .ticket{border-top:1px solid var(--line);padding:14px;background:var(--panel);overflow-x:auto;max-width:100%;}
   .ticket-tabs{display:flex;gap:2px;margin-bottom:12px;}
   .ticket-tab{flex:1;padding:8px;text-align:center;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.04em;cursor:pointer;}
   .ticket-tab.buy.active{background:var(--mint-dim);color:var(--mint);border-color:var(--mint);}
   .ticket-tab.sell.active{background:var(--red-dim);color:var(--red);border-color:var(--red);}
   .ticket-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end;}
-  .field{display:flex;flex-direction:column;gap:5px;}
+  .field{display:flex;flex-direction:column;gap:5px;min-width:0;}
   .field label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
-  .field input, .field select{background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:8px 9px;border-radius:6px;font-family:'IBM Plex Mono';font-size:13px;}
+  .field input, .field select{background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:8px 9px;border-radius:6px;font-family:'IBM Plex Mono';font-size:13px;width:100%;max-width:100%;}
   .field.checkbox{flex-direction:row;align-items:center;gap:6px;}
   .field.checkbox label{text-transform:none;font-size:12px;color:var(--muted);}
   .submit-btn{grid-column:span 4;margin-top:10px;padding:11px;border-radius:6px;border:none;font-weight:700;font-size:13px;letter-spacing:.03em;cursor:pointer;text-transform:uppercase;}
@@ -432,6 +432,18 @@
       <input type="password" id="anthropicKeyInput" placeholder="sk-ant-...">
     </div>
 
+    <div class="field" style="margin-top:14px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Max recommendations sent per scan</label>
+      <select id="maxRecsPerScanInput">
+        <option value="1">1 — only the single best idea</option>
+        <option value="2">2 — top 2 by confidence</option>
+        <option value="3">3 — top 3 by confidence</option>
+      </select>
+    </div>
+    <div class="warn-box" style="margin-top:10px;margin-bottom:14px;">
+      Even when more coins clear the multi-timeframe gate and produce a valid idea, only the top N by confluence score get sent — ranked by the same code-computed score used for conviction, not just whichever came first. This is separate from auto-trade eligibility, which is always restricted to the single highest-ranked idea regardless of this setting.
+    </div>
+
     <div class="field checkbox" style="margin-top:16px;margin-bottom:10px;">
       <input type="checkbox" id="autoTradeEnabled">
       <label for="autoTradeEnabled">⚡ Auto-trade — execute confirmed ideas without my approval</label>
@@ -638,6 +650,7 @@
     defaultTakeProfitPct:'hlDash_defaultTakeProfitPct', maxStopLossPct:'hlDash_maxStopLossPct',
     maxTakeProfitPct:'hlDash_maxTakeProfitPct', maxEntryDeviationPct:'hlDash_maxEntryDeviationPct',
     circuitBreakerDrawdownPct:'hlDash_circuitBreakerDrawdownPct',
+    maxRecsPerScan:'hlDash_maxRecsPerScan',
     autoTradeEnabled:'hlDash_autoTradeEnabled',
     scanMode:'hlDash_scanMode', filteredTopN:'hlDash_filteredTopN',
     filteredMinOI:'hlDash_filteredMinOI', filteredMinVolume24h:'hlDash_filteredMinVolume24h',
@@ -658,6 +671,7 @@
     maxTakeProfitPct: parseFloat(localStorage.getItem(LS_KEYS.maxTakeProfitPct)) || 15,
     maxEntryDeviationPct: parseFloat(localStorage.getItem(LS_KEYS.maxEntryDeviationPct)) || 2,
     circuitBreakerDrawdownPct: parseFloat(localStorage.getItem(LS_KEYS.circuitBreakerDrawdownPct)) || 25,
+    maxRecsPerScan: parseInt(localStorage.getItem(LS_KEYS.maxRecsPerScan), 10) || 1,
     autoTradeEnabled: localStorage.getItem(LS_KEYS.autoTradeEnabled) === 'true',
     scanMode: localStorage.getItem(LS_KEYS.scanMode) || 'watchlist',
     filteredTopN: parseInt(localStorage.getItem(LS_KEYS.filteredTopN), 10) || 20,
@@ -692,7 +706,7 @@
   let recommendations = [];
   let lastAccountValue = null;
   const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
-  const MAX_RECS_PER_SCAN = 2; // keep only the top-N by confidence, even if more candidates qualify
+  // MAX_RECS_PER_SCAN moved to cfg.maxRecsPerScan (configurable in Settings, default 1)
   let lastWithdrawable = null;
   let lastPositions = [];
   let dismissedIds = JSON.parse(localStorage.getItem('hlDash_dismissedRecIds') || '[]');
@@ -1894,7 +1908,7 @@
         entry_price: t.lastClose,
         stop_loss_price: null, take_profit_price: null,
         suggested_size_pct_equity: Math.max(1, Math.round((maxPositionPct/2) * 10) / 10),
-        suggested_leverage: 1,
+        suggested_leverage: Math.max(1, Math.round(cfg.maxLeverage/2)),
         risk_flags: ['technicals-only fallback — no AI research this cycle']
       };
       rec = resolveRiskLevels(rec, t, maxStopLossPct, defaultTakeProfitPct, cfg.maxTakeProfitPct, cfg.maxEntryDeviationPct);
@@ -2141,7 +2155,18 @@
       if(!coins.length) log('Filtered universe returned no coins — thresholds may be too strict', 'err');
       return coins;
     }
-    return cfg.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+    // Unlike filtered mode (which only ever sees genuinely perp-listed coins), the watchlist is
+    // hand-typed — nothing stops a typo, a delisted symbol, or a spot-only token (Hyperliquid's
+    // own PURR has no perpetual market at all) from being in there. getSzDecimals() already
+    // fetches and caches the real perps universe for price-rounding elsewhere, so this reuses
+    // that instead of a separate fetch, and returns undefined for anything not actually listed.
+    const rawWatchlist = cfg.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+    const checked = await Promise.all(rawWatchlist.map(async c => ({ coin: c, valid: (await getSzDecimals(c)) !== undefined })));
+    const invalid = checked.filter(c => !c.valid).map(c => c.coin);
+    if(invalid.length){
+      log(`Watchlist contains symbol(s) with no live Hyperliquid perpetual market — skipping: ${invalid.join(', ')} (check for typos, delistings, or spot-only tokens)`, 'err');
+    }
+    return checked.filter(c => c.valid).map(c => c.coin);
   }
 
   async function callAnthropicOnce(system, user){
@@ -2276,6 +2301,14 @@
         log(`Dropped ${beforeValidation - newRecs.length} malformed recommendation(s) missing a valid coin/direction/price`, 'err');
       }
 
+      // The AI should only ever recommend a coin we actually asked it about — anything else is
+      // exactly the scenario that produces "Unknown asset: undefined" from Hyperliquid later.
+      const beforeCoinCheck = newRecs.length;
+      newRecs = newRecs.filter(rec => alignedCoins.includes(rec.coin));
+      if(newRecs.length < beforeCoinCheck){
+        log(`Dropped ${beforeCoinCheck - newRecs.length} recommendation(s) naming a coin outside this scan's coin list — likely an unrecognized symbol from the AI`, 'err');
+      }
+
       if(!usedFallback){
         newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], cfg.maxStopLossPct, cfg.defaultTakeProfitPct, cfg.maxTakeProfitPct, cfg.maxEntryDeviationPct));
         newRecs.forEach(rec => { rec.conviction = computeConviction(rec, technicals[rec.coin]); rec.source = 'manual'; });
@@ -2283,13 +2316,14 @@
         newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; rec.source = 'manual-fallback'; });
       }
 
-      // Rank by our own computed confluence score and keep only the strongest candidates —
-      // same cap as the backend, applied before chart image generation for dropped ideas.
-      if(newRecs.length > MAX_RECS_PER_SCAN){
-        newRecs.sort((a,b) => (b.confluence_score || 0) - (a.confluence_score || 0));
-        const dropped = newRecs.slice(MAX_RECS_PER_SCAN).map(r => r.coin + ' (' + (r.confluence_score||0) + '/8)');
-        newRecs = newRecs.slice(0, MAX_RECS_PER_SCAN);
-        log('Capped to top ' + MAX_RECS_PER_SCAN + ' by confidence — dropped: ' + dropped.join(', '), '');
+      // Rank by our own computed confluence score — always sorted, not just when capping is
+      // needed, since with a default cap of 1 most scans have too few candidates to trigger the
+      // length check below at all.
+      newRecs.sort((a,b) => (b.confluence_score || 0) - (a.confluence_score || 0));
+      if(newRecs.length > cfg.maxRecsPerScan){
+        const dropped = newRecs.slice(cfg.maxRecsPerScan).map(r => r.coin + ' (' + (r.confluence_score||0) + '/8)');
+        newRecs = newRecs.slice(0, cfg.maxRecsPerScan);
+        log('Capped to top ' + cfg.maxRecsPerScan + ' by confidence — dropped: ' + dropped.join(', '), '');
       }
 
       newRecs.forEach(rec => { if(!rec.id) rec.id = rec.coin + '-' + Date.now() + '-' + Math.random().toString(36).slice(2,7); });
@@ -2695,6 +2729,14 @@
       setExecuteStatus('Placing order…', '');
 
       const coin = document.getElementById('confirmOverlay').dataset.coin;
+      if(!coin || coin === 'undefined'){
+        // HTML dataset attributes stringify undefined into the literal text "undefined" — this
+        // guard is redundant with openConfirmModal's own check, but cheap insurance in case
+        // this function is ever reached some other way in the future.
+        setExecuteStatus('⚠ Missing coin data — this looks like a stale/corrupted recommendation. Close this and dismiss it from the list.', 'bad');
+        btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
+        return;
+      }
       const recId = document.getElementById('confirmOverlay').dataset.recId;
       if(recId){
         try{
@@ -2724,6 +2766,16 @@
       }
 
       const szDecimals = await getSzDecimals(coin);
+      if(szDecimals === undefined){
+        // getSzDecimals returns undefined specifically when the coin isn't in Hyperliquid's
+        // current asset universe — meaning the AI used a name Hyperliquid doesn't recognize.
+        // Sending this through anyway is exactly what produces "Unknown asset: undefined": the
+        // SDK's internal name-to-index lookup fails, and that undefined index is what the
+        // exchange is actually reporting — not a missing coin field, which is already validated.
+        setExecuteStatus('⚠ "' + coin + '" is not a recognized Hyperliquid asset (checked against the live asset list) — the AI may have used an incorrect or outdated symbol. This trade cannot be executed.', 'bad');
+        btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
+        return;
+      }
       const roundedEntryPx = formatHlPrice(entryPx, szDecimals);
       const roundedStopPx = formatHlPrice(stopLoss, szDecimals);
       const orders = [{
@@ -2853,6 +2905,7 @@
       maxTakeProfitPct: cfg.maxTakeProfitPct,
       maxEntryDeviationPct: cfg.maxEntryDeviationPct,
       circuitBreakerDrawdownPct: cfg.circuitBreakerDrawdownPct,
+      maxRecsPerScan: cfg.maxRecsPerScan,
       aiResearchEnabled: cfg.aiResearchEnabled,
       autoTradeEnabled: cfg.autoTradeEnabled,
       updated_at: new Date().toISOString()
@@ -3070,6 +3123,7 @@
       document.getElementById('maxTakeProfitPctInput').value = cfg.maxTakeProfitPct;
       document.getElementById('maxEntryDeviationPctInput').value = cfg.maxEntryDeviationPct;
       document.getElementById('circuitBreakerDrawdownPctInput').value = cfg.circuitBreakerDrawdownPct;
+      document.getElementById('maxRecsPerScanInput').value = cfg.maxRecsPerScan;
       document.getElementById('githubRepoInput').value = cfg.githubRepo;
       document.getElementById('githubPatInput').value = cfg.githubPat;
       document.getElementById('autoPublishConfig').checked = cfg.autoPublishConfig;
@@ -3100,6 +3154,7 @@
       cfg.maxTakeProfitPct = parseFloat(document.getElementById('maxTakeProfitPctInput').value) || cfg.maxTakeProfitPct;
       cfg.maxEntryDeviationPct = parseFloat(document.getElementById('maxEntryDeviationPctInput').value) || cfg.maxEntryDeviationPct;
       cfg.circuitBreakerDrawdownPct = parseFloat(document.getElementById('circuitBreakerDrawdownPctInput').value) || cfg.circuitBreakerDrawdownPct;
+      cfg.maxRecsPerScan = parseInt(document.getElementById('maxRecsPerScanInput').value, 10) || cfg.maxRecsPerScan;
       cfg.aiResearchEnabled = document.getElementById('aiResearchEnabled').checked;
       cfg.autoTradeEnabled = document.getElementById('autoTradeEnabled').checked;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
@@ -3125,6 +3180,7 @@
       cfg.maxTakeProfitPct = parseFloat(document.getElementById('maxTakeProfitPctInput').value) || 15;
       cfg.maxEntryDeviationPct = parseFloat(document.getElementById('maxEntryDeviationPctInput').value) || 2;
       cfg.circuitBreakerDrawdownPct = parseFloat(document.getElementById('circuitBreakerDrawdownPctInput').value) || 25;
+      cfg.maxRecsPerScan = parseInt(document.getElementById('maxRecsPerScanInput').value, 10) || 1;
       cfg.autoTradeEnabled = document.getElementById('autoTradeEnabled').checked;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
@@ -3160,6 +3216,7 @@
       safeSet(LS_KEYS.maxTakeProfitPct, cfg.maxTakeProfitPct);
       safeSet(LS_KEYS.maxEntryDeviationPct, cfg.maxEntryDeviationPct);
       safeSet(LS_KEYS.circuitBreakerDrawdownPct, cfg.circuitBreakerDrawdownPct);
+      safeSet(LS_KEYS.maxRecsPerScan, cfg.maxRecsPerScan);
       safeSet(LS_KEYS.githubRepo, cfg.githubRepo);
       safeSet(LS_KEYS.githubPat, cfg.githubPat);
       safeSet(LS_KEYS.autoPublishConfig, cfg.autoPublishConfig);
