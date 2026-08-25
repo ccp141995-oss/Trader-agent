@@ -2,5 +2,10 @@
   "tripped": false,
   "trippedAt": null,
   "reason": null,
-  "equityHistory": []
+  "equityHistory": [
+    {
+      "t": 1787702047697,
+      "equity": 989.213237
+    }
+  ]
 }
