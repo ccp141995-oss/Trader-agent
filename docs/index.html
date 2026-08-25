@@ -82,7 +82,9 @@
   .ticket-tab.buy.active{background:var(--mint-dim);color:var(--mint);border-color:var(--mint);}
   .ticket-tab.sell.active{background:var(--red-dim);color:var(--red);border-color:var(--red);}
   .ticket-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end;}
-  .field{display:flex;flex-direction:column;gap:5px;min-width:0;}
+  .field{display:flex;flex-direction:column;gap:5px;min-width:84px;}
+  .field-span-4{grid-column:span 4;}
+  .field-span-2{grid-column:span 2;}
   .field label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
   .field input, .field select{background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:8px 9px;border-radius:6px;font-family:'IBM Plex Mono';font-size:13px;width:100%;max-width:100%;}
   .field.checkbox{flex-direction:row;align-items:center;gap:6px;}
@@ -216,10 +218,10 @@
     .mark-price{ font-size:16px; }
     .interval-btn{ padding:7px 8px; }
     .ticket{ padding:12px; }
-    .ticket-grid{ grid-template-columns:repeat(2, 1fr); gap:8px; }
+    .ticket-grid{ grid-template-columns:repeat(2, 1fr); gap:8px; min-width:300px; }
     .submit-btn{ grid-column:span 2; padding:13px; }
     .tabs .tab{ font-size:11px; padding:10px 4px; }
-    .field.checkbox{ grid-column:span 2; }
+    .field-span-4{ grid-column:span 2; }
     .risk-grid{ grid-template-columns:1fr 1fr; }
     .confirm-grid{ grid-template-columns:1fr 1fr; }
     .modal{ padding:16px; width:94vw; }
@@ -325,19 +327,19 @@
           <label>Size (coin units)</label>
           <input type="number" id="sizeInput" placeholder="0.00" step="any">
         </div>
-        <div class="field" style="grid-column:span 4;">
+        <div class="field field-span-4">
           <label>Est. notional value</label>
           <input type="text" id="ticketNotionalValue" disabled placeholder="Enter price and size above">
         </div>
-        <div class="field" style="grid-column:span 2;">
+        <div class="field field-span-2">
           <label>Stop-loss (optional, USD)</label>
           <input type="number" id="ticketStopLoss" placeholder="0.00" step="any">
         </div>
-        <div class="field" style="grid-column:span 2;">
+        <div class="field field-span-2">
           <label>Take-profit (optional, USD)</label>
           <input type="number" id="ticketTakeProfit" placeholder="0.00" step="any">
         </div>
-        <div class="field checkbox" style="grid-column:span 4;">
+        <div class="field checkbox field-span-4">
           <input type="checkbox" id="reduceOnly">
           <label for="reduceOnly">Reduce only</label>
         </div>
