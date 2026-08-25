@@ -558,10 +558,14 @@
     </div>
     <div class="modal-actions" style="margin-bottom:10px;">
       <button class="btn-secondary" id="publishConfigBtn" style="flex:1;">Publish now</button>
+      <button class="btn-secondary" id="checkBackendSyncBtn" style="flex:1;">Check backend sync</button>
     </div>
     <div id="publishStatus" style="font-size:10.5px;color:var(--muted-2);margin-bottom:10px;"></div>
+    <div id="backendSyncStatus" style="font-size:10.5px;margin-bottom:10px;"></div>
     <div class="warn-box">
       This publishes watchlist/scan mode, filtered-universe thresholds, max position size, max leverage and default take-profit to <code>docs/agent-config.json</code> in your repo — the backend scanner and Telegram executor read it and use it in place of their GitHub Variable defaults. It never touches trading keys or funds. Scope the token to just this one repo with Contents read/write only.
+      <br><br>
+      <b>Important:</b> the backend only sees changes you actually publish (or that auto-publish sends). If you change a setting here and don't publish it, your dashboard and your backend can silently disagree indefinitely — the backend keeps running whatever was last published, falling back to GitHub Variables if nothing ever was. Use "Check backend sync" above any time you want to confirm they actually match.
     </div>
 
     <div class="modal-actions">
@@ -2850,6 +2854,42 @@
     return putData;
   }
 
+  async function checkBackendSync(){
+    const el = document.getElementById('backendSyncStatus');
+    el.textContent = 'Checking…';
+    el.style.color = '';
+    try{
+      const res = await fetch('agent-config.json', { cache: 'no-store' });
+      if(!res.ok) throw new Error('Could not fetch docs/agent-config.json (HTTP ' + res.status + ')');
+      const remote = await res.json();
+      const local = buildSharedConfig();
+
+      const mismatches = [];
+      Object.keys(local).forEach(key => {
+        if(key === 'updated_at') return;
+        const localVal = local[key];
+        const remoteVal = remote[key];
+        // Loose equality on purpose: "5" vs 5, or undefined vs missing, shouldn't count as a
+        // real mismatch — only a genuinely different value should.
+        if(String(localVal) !== String(remoteVal)){
+          mismatches.push(`${key}: dashboard says "${localVal}", backend has "${remoteVal === undefined ? '(not set — using GitHub Variable default)' : remoteVal}"`);
+        }
+      });
+
+      const publishedAt = remote.updated_at ? new Date(remote.updated_at).toLocaleString() : 'never';
+      if(!mismatches.length){
+        el.style.color = 'var(--mint)';
+        el.innerHTML = '✓ In sync — backend last updated ' + publishedAt + '.';
+      } else {
+        el.style.color = 'var(--red)';
+        el.innerHTML = '⚠ Out of sync (backend last published ' + publishedAt + '):<br>' + mismatches.map(m => '• ' + m).join('<br>') + '<br><br>Click "Publish now" above to push your current dashboard settings to the backend.';
+      }
+    }catch(e){
+      el.style.color = 'var(--red)';
+      el.textContent = 'Could not check: ' + e.message;
+    }
+  }
+
   async function publishConfigToGitHub(){
     const statusEl = document.getElementById('publishStatus');
     if(!cfg.githubPat || !cfg.githubRepo){
@@ -3039,6 +3079,8 @@
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
       publishConfigToGitHub();
     });
+
+    document.getElementById('checkBackendSyncBtn').addEventListener('click', checkBackendSync);
 
     document.getElementById('saveSettings').addEventListener('click', ()=>{
       cfg.address = document.getElementById('accountAddressInput').value.trim();
