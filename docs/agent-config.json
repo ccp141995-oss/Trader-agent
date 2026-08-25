@@ -11,7 +11,7 @@
   "maxTakeProfitPct": 100,
   "maxEntryDeviationPct": 2,
   "circuitBreakerDrawdownPct": 25,
-  "aiResearchEnabled": false,
+  "aiResearchEnabled": true,
   "autoTradeEnabled": false,
-  "updated_at": "2026-08-25T17:20:54.420Z"
+  "updated_at": "2026-08-25T17:53:19.639Z"
 }
