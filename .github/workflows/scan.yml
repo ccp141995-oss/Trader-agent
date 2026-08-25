@@ -45,6 +45,7 @@ jobs:
           MAX_STOP_LOSS_PCT: ${{ vars.MAX_STOP_LOSS_PCT }}
           AI_RESEARCH_ENABLED: ${{ vars.AI_RESEARCH_ENABLED }}
           AUTO_TRADE_ENABLED: ${{ vars.AUTO_TRADE_ENABLED }}
+          MAX_RECS_PER_SCAN: ${{ vars.MAX_RECS_PER_SCAN }}
           MAX_TAKE_PROFIT_PCT: ${{ vars.MAX_TAKE_PROFIT_PCT }}
           MAX_ENTRY_DEVIATION_PCT: ${{ vars.MAX_ENTRY_DEVIATION_PCT }}
         run: node agent/scan.js
