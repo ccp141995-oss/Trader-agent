@@ -142,7 +142,7 @@ async function getSpotUsdcBalance(){
     const state = await infoPost({ type: 'spotClearinghouseState', user: HL_ACCOUNT_ADDRESS });
     const usdc = (state.balances || []).find(b => b.coin === 'USDC');
     return usdc ? parseFloat(usdc.total) : 0;
-  }catch(e){ return null; }
+  }catch(e){ console.error('spotClearinghouseState fetch failed:', e.message); return null; }
 }
 
 // Hyperliquid's Unified Account / Portfolio Margin modes (the default for most users as of
@@ -153,14 +153,17 @@ async function getSpotUsdcBalance(){
 // Standard/Manual-mode accounts still have genuinely separate balances. Rather than assume either,
 // resolve whichever endpoint actually reflects real balance.
 async function getEffectiveEquity(){
-  if(!HL_ACCOUNT_ADDRESS) return { effectiveEquity: null, perpEquity: null, spotUsdc: null, perpState: null };
+  if(!HL_ACCOUNT_ADDRESS) return { effectiveEquity: null, perpEquity: null, spotUsdc: null, perpState: null, perpFetchFailed: false, spotFetchFailed: false };
+  let perpFetchFailed = false;
   const [perpState, spotUsdc] = await Promise.all([
-    infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch(() => null),
+    infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch((e) => { console.error('clearinghouseState fetch failed:', e.message); perpFetchFailed = true; return null; }),
     getSpotUsdcBalance()
   ]);
+  const spotFetchFailed = spotUsdc === null;
   const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
   const effectiveEquity = Math.max(perpEquity, spotUsdc || 0);
-  return { effectiveEquity, perpEquity, spotUsdc, perpState };
+  console.log(`Account snapshot: perpEquity=$${perpEquity.toFixed(2)}${perpFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, spotUsdc=$${(spotUsdc||0).toFixed(2)}${spotFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, effectiveEquity=$${effectiveEquity.toFixed(2)}`);
+  return { effectiveEquity, perpEquity, spotUsdc, perpState, perpFetchFailed, spotFetchFailed };
 }
 
 async function getAccountEquity(){
@@ -271,12 +274,12 @@ async function getAccountSnapshot(){
     : HL_ACCOUNT_ADDRESS;
   const queried = `${HL_EXEC_NETWORK}: ${addrShort}`;
   try{
-    const { effectiveEquity, perpEquity, spotUsdc, perpState } = await getEffectiveEquity();
+    const { effectiveEquity, perpEquity, spotUsdc, perpState, perpFetchFailed, spotFetchFailed } = await getEffectiveEquity();
     const ms = (perpState && perpState.marginSummary) || {};
     const openPositions = perpState ? (perpState.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0).length : 0;
     const marginUsed = parseFloat(ms.totalMarginUsed);
     const withdrawable = perpState ? parseFloat(perpState.withdrawable) : null;
-    const usingUnified = spotUsdc > perpEquity;
+    const usingUnified = (spotUsdc || 0) > (perpEquity || 0);
 
     let lines = [
       `• Account value: $${effectiveEquity != null ? effectiveEquity.toFixed(2) : 'n/a'}${usingUnified ? ' (from Spot/unified balance)' : ''}`,
@@ -285,6 +288,9 @@ async function getAccountSnapshot(){
       `• Open positions: ${openPositions}`,
       `• Queried: ${queried}`
     ];
+    if(perpFetchFailed || spotFetchFailed){
+      lines.push(`• ⚠ ${perpFetchFailed ? 'Perps' : 'Spot'} balance check failed to fetch this time — if the value above looks too low, this is likely why. Should self-correct next time it's checked.`);
+    }
     if(usingUnified){
       lines.push(`• Perps-specific state showed $0, but Spot/unified USDC balance is $${spotUsdc.toFixed(2)} — using that as your account value. This is expected on Hyperliquid's Unified Account mode, not an error.`);
     } else if(!effectiveEquity){

@@ -93,23 +93,28 @@ async function infoPost(body){
 // the real number lives in the spot/unified endpoint instead. This is only used for the
 // funds-required estimate shown in the message; execution always re-checks live equity itself.
 async function loadAccountSnapshot(){
-  if(!HL_ACCOUNT_ADDRESS) return { effectiveEquity: null, openPositionCoins: new Set() };
+  if(!HL_ACCOUNT_ADDRESS) return { effectiveEquity: null, openPositionCoins: new Set(), perpFetchFailed: false, spotFetchFailed: false };
   try{
+    let perpFetchFailed = false, spotFetchFailed = false;
     const [perpState, spotState] = await Promise.all([
-      infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch(() => null),
-      infoPost({ type: 'spotClearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch(() => null)
+      infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch((e) => { console.error('clearinghouseState fetch failed:', e.message); perpFetchFailed = true; return null; }),
+      infoPost({ type: 'spotClearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch((e) => { console.error('spotClearinghouseState fetch failed:', e.message); spotFetchFailed = true; return null; })
     ]);
     const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
     const spotUsdc = spotState ? (parseFloat(((spotState.balances || []).find(b => b.coin === 'USDC') || {}).total) || 0) : 0;
     const effectiveEquity = Math.max(perpEquity, spotUsdc);
+    console.log(`Account snapshot: perpEquity=$${perpEquity.toFixed(2)}${perpFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, spotUsdc=$${spotUsdc.toFixed(2)}${spotFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, effectiveEquity=$${effectiveEquity.toFixed(2)}`);
     const openPositionCoins = new Set(
       perpState ? (perpState.assetPositions || [])
         .filter(p => parseFloat(p.position.szi) !== 0)
         .map(p => p.position.coin)
         : []
     );
-    return { effectiveEquity, openPositionCoins };
-  }catch(e){ return { effectiveEquity: null, openPositionCoins: new Set() }; }
+    return { effectiveEquity, openPositionCoins, perpEquity, spotUsdc, perpFetchFailed, spotFetchFailed };
+  }catch(e){
+    console.error('loadAccountSnapshot failed entirely:', e.message);
+    return { effectiveEquity: null, openPositionCoins: new Set(), perpFetchFailed: true, spotFetchFailed: true };
+  }
 }
 
 async function loadMarketContext(coins){
@@ -949,7 +954,21 @@ function tighterStop(direction, stopA, stopB){
   return direction === 'short' ? Math.min(stopA, stopB) : Math.max(stopA, stopB);
 }
 
+// A malformed recommendation (missing coin, bad direction, non-numeric prices) must never reach
+// Telegram or the dashboard — if it did, it would only fail cryptically much later, e.g. as
+// "Unknown asset: undefined" from Hyperliquid at the moment someone tries to confirm it, instead
+// of being caught here where the actual cause is obvious.
+function isValidRec(rec){
+  if(!rec || typeof rec.coin !== 'string' || !rec.coin.trim()) return false;
+  if(rec.direction !== 'long' && rec.direction !== 'short') return false;
+  if(!isFinite(rec.entry_price) || rec.entry_price <= 0) return false;
+  if(rec.stop_loss_price != null && (!isFinite(rec.stop_loss_price) || rec.stop_loss_price <= 0)) return false;
+  return true;
+}
+
 function mergeConsistentRecs(recsA, recsB){
+  recsA = recsA.filter(isValidRec);
+  recsB = recsB.filter(isValidRec);
   const merged = [];
   for(const a of recsA){
     const b = recsB.find(x => x.coin === a.coin && x.direction === a.direction);
@@ -1193,9 +1212,11 @@ async function main(){
     console.log(`Account equity ($${equityCheck.toFixed(2)}) is below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value — skipping this scan entirely, no trade could be placed.`);
     const sinceLastAlert = Date.now() - (state.lastInsufficientEquityAlertTime || 0);
     if(sinceLastAlert > 6 * 60 * 60 * 1000){ // rate-limited to once per 6 hours, not every 15-min cycle
+      const breakdown = `(Perps: $${(accountSnapshot.perpEquity||0).toFixed(2)}${accountSnapshot.perpFetchFailed?' — fetch FAILED':''}, Spot: $${(accountSnapshot.spotUsdc||0).toFixed(2)}${accountSnapshot.spotFetchFailed?' — fetch FAILED':''})`;
       await sendTelegram(
-        `⚠ Scanning is paused — account equity is $${equityCheck.toFixed(2)}, below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value. `
+        `⚠ Scanning is paused — account equity is $${equityCheck.toFixed(2)} ${breakdown}, below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value. `
         + `No trade could be placed regardless of what the scan finds, so it's skipped entirely (no API cost either) until funded. `
+        + (accountSnapshot.perpFetchFailed || accountSnapshot.spotFetchFailed ? `⚠ One of the balance checks above failed to fetch — if your real balance is higher than shown, this is likely why; it should self-correct once that fetch succeeds again. ` : '')
         + `This will keep checking silently and resume automatically once equity is at least $${MIN_ORDER_NOTIONAL} — you won't get another alert like this for 6 hours.`
       );
       state.lastInsufficientEquityAlertTime = Date.now();
@@ -1294,6 +1315,15 @@ async function main(){
     state.lastAiCallTime = Date.now(); // resets the cooldown whether the call succeeded or failed
   }
   console.log('=== PHASE 2 COMPLETE: got ' + newRecs.length + ' recommendation(s)' + (usedFallback ? ' (technicals-only)' : ' (AI-researched, self-consistent)') + ' ===');
+
+  // Final safety net regardless of source: a malformed rec must never reach Telegram or the
+  // dashboard, where it would only fail cryptically later (e.g. "Unknown asset: undefined" from
+  // Hyperliquid at confirm time) instead of being caught here with the actual cause visible.
+  const beforeValidation = newRecs.length;
+  newRecs = newRecs.filter(isValidRec);
+  if(newRecs.length < beforeValidation){
+    console.error(`Dropped ${beforeValidation - newRecs.length} malformed recommendation(s) missing a valid coin/direction/price — this points at an AI response schema issue.`);
+  }
 
   if(!usedFallback){
     newRecs.forEach(rec => resolveRiskLevels(rec, technicals[rec.coin], MAX_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT, MAX_TAKE_PROFIT_PCT, MAX_ENTRY_DEVIATION_PCT));
