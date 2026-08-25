@@ -38,6 +38,7 @@ jobs:
           FILTERED_MIN_OI: ${{ vars.FILTERED_MIN_OI }}
           FILTERED_MIN_VOLUME_24H: ${{ vars.FILTERED_MIN_VOLUME_24H }}
           HL_NETWORK: ${{ vars.HL_NETWORK }}
+          HL_EXEC_NETWORK: ${{ vars.HL_EXEC_NETWORK }}
           AUTO_SCAN_INTERVAL_MIN: ${{ vars.AUTO_SCAN_INTERVAL_MIN }}
           SIGNAL_SENSITIVITY: ${{ vars.SIGNAL_SENSITIVITY }}
           EXECUTION_WINDOW_MIN: ${{ vars.EXECUTION_WINDOW_MIN }}
