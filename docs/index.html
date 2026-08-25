@@ -2014,7 +2014,21 @@
     return direction === 'short' ? Math.min(stopA, stopB) : Math.max(stopA, stopB);
   }
 
+  // A malformed recommendation (missing coin, bad direction, non-numeric prices) must never
+  // reach the confirm modal — it would only fail cryptically at order-placement time instead
+  // (e.g. "Unknown asset: undefined" from Hyperliquid), since HTML dataset attributes silently
+  // stringify undefined into the literal text "undefined".
+  function isValidRec(rec){
+    if(!rec || typeof rec.coin !== 'string' || !rec.coin.trim()) return false;
+    if(rec.direction !== 'long' && rec.direction !== 'short') return false;
+    if(!isFinite(rec.entry_price) || rec.entry_price <= 0) return false;
+    if(rec.stop_loss_price != null && (!isFinite(rec.stop_loss_price) || rec.stop_loss_price <= 0)) return false;
+    return true;
+  }
+
   function mergeConsistentRecs(recsA, recsB){
+    recsA = recsA.filter(isValidRec);
+    recsB = recsB.filter(isValidRec);
     const merged = [];
     for(const a of recsA){
       const b = recsB.find(x => x.coin === a.coin && x.direction === a.direction);
@@ -2121,6 +2135,7 @@
   }
 
   async function resolveScanCoins(){
+    log('resolveScanCoins: cfg.scanMode is currently ' + JSON.stringify(cfg.scanMode), '');
     if(cfg.scanMode === 'filtered'){
       const coins = await loadFilteredUniverse();
       if(!coins.length) log('Filtered universe returned no coins — thresholds may be too strict', 'err');
@@ -2251,6 +2266,14 @@
           usedFallback = true;
         }
         lastFullScanTime = Date.now(); // resets the AI cooldown whether the call succeeded or failed
+      }
+
+      // Final safety net regardless of source: a malformed rec must never reach the confirm
+      // modal, where it would only fail cryptically at order-placement time instead.
+      const beforeValidation = newRecs.length;
+      newRecs = newRecs.filter(isValidRec);
+      if(newRecs.length < beforeValidation){
+        log(`Dropped ${beforeValidation - newRecs.length} malformed recommendation(s) missing a valid coin/direction/price`, 'err');
       }
 
       if(!usedFallback){
@@ -2551,6 +2574,10 @@
   }
 
   function openConfirmModal(rec){
+    if(!isValidRec(rec)){
+      log('Cannot open this recommendation — it\'s missing required data (coin/direction/price). This may be a stale entry from before a recent fix; dismissing it is recommended.', 'err');
+      return;
+    }
     document.getElementById('executeStatusBox').style.display = 'none';
     document.getElementById('placeConfirmedTrade').textContent = 'Confirm & Place Trade';
     document.getElementById('confirmTitle').textContent = rec.coin + ' — ' + (rec.direction === 'long' ? 'Long' : 'Short') + ' (' + (rec.conviction||'low') + ' conviction, ' + (rec.confluence_score != null ? rec.confluence_score+'/8 factors' : 'n/a') + ')';
