@@ -13,6 +13,13 @@ const fs = require('fs');
 const path = require('path');
 
 const HL_NETWORK = (process.env.HL_NETWORK || 'mainnet').toLowerCase();
+// Separate from HL_NETWORK on purpose: HL_NETWORK is for market data (candles, signals) — you
+// want real mainnet liquidity for that regardless of where your actual account lives. Account
+// equity/positions must be queried against whichever network the funded account is actually
+// on, same as poll_telegram.js's HL_EXEC_NETWORK. Mixing these up means checking equity on the
+// wrong network entirely, silently, with no error — exactly what happened before this was split out.
+const HL_EXEC_NETWORK = (process.env.HL_EXEC_NETWORK || 'testnet').toLowerCase();
+const EXEC_INFO_URL = HL_EXEC_NETWORK === 'mainnet' ? 'https://api.hyperliquid.xyz/info' : 'https://api.hyperliquid-testnet.xyz/info';
 
 function hyperliquidChartUrl(coin){
   // Always mainnet — the real, liquid chart is what's actually useful to look at, regardless
@@ -88,6 +95,17 @@ async function infoPost(body){
   return res.json();
 }
 
+// Always hits HL_EXEC_NETWORK, never HL_NETWORK — for account/equity/position queries only.
+async function execInfoPost(body){
+  const res = await fetch(EXEC_INFO_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok) throw new Error('exec info ' + body.type + ' HTTP ' + res.status);
+  return res.json();
+}
+
 // Same unified-account-aware resolution as the poller: on Hyperliquid's Unified Account mode
 // (default for most users), the perps-specific endpoint can read $0 even with real balance —
 // the real number lives in the spot/unified endpoint instead. This is only used for the
@@ -97,13 +115,13 @@ async function loadAccountSnapshot(){
   try{
     let perpFetchFailed = false, spotFetchFailed = false;
     const [perpState, spotState] = await Promise.all([
-      infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch((e) => { console.error('clearinghouseState fetch failed:', e.message); perpFetchFailed = true; return null; }),
-      infoPost({ type: 'spotClearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch((e) => { console.error('spotClearinghouseState fetch failed:', e.message); spotFetchFailed = true; return null; })
+      execInfoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch((e) => { console.error('clearinghouseState fetch failed:', e.message); perpFetchFailed = true; return null; }),
+      execInfoPost({ type: 'spotClearinghouseState', user: HL_ACCOUNT_ADDRESS }).catch((e) => { console.error('spotClearinghouseState fetch failed:', e.message); spotFetchFailed = true; return null; })
     ]);
     const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
     const spotUsdc = spotState ? (parseFloat(((spotState.balances || []).find(b => b.coin === 'USDC') || {}).total) || 0) : 0;
     const effectiveEquity = Math.max(perpEquity, spotUsdc);
-    console.log(`Account snapshot: perpEquity=$${perpEquity.toFixed(2)}${perpFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, spotUsdc=$${spotUsdc.toFixed(2)}${spotFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, effectiveEquity=$${effectiveEquity.toFixed(2)}`);
+    console.log(`Account snapshot (queried on ${HL_EXEC_NETWORK}): perpEquity=$${perpEquity.toFixed(2)}${perpFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, spotUsdc=$${spotUsdc.toFixed(2)}${spotFetchFailed ? ' (FETCH FAILED, defaulted to 0)' : ''}, effectiveEquity=$${effectiveEquity.toFixed(2)}`);
     const openPositionCoins = new Set(
       perpState ? (perpState.assetPositions || [])
         .filter(p => parseFloat(p.position.szi) !== 0)
@@ -1212,7 +1230,7 @@ async function main(){
     console.log(`Account equity ($${equityCheck.toFixed(2)}) is below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value — skipping this scan entirely, no trade could be placed.`);
     const sinceLastAlert = Date.now() - (state.lastInsufficientEquityAlertTime || 0);
     if(sinceLastAlert > 6 * 60 * 60 * 1000){ // rate-limited to once per 6 hours, not every 15-min cycle
-      const breakdown = `(Perps: $${(accountSnapshot.perpEquity||0).toFixed(2)}${accountSnapshot.perpFetchFailed?' — fetch FAILED':''}, Spot: $${(accountSnapshot.spotUsdc||0).toFixed(2)}${accountSnapshot.spotFetchFailed?' — fetch FAILED':''})`;
+      const breakdown = `(queried on ${HL_EXEC_NETWORK} — Perps: $${(accountSnapshot.perpEquity||0).toFixed(2)}${accountSnapshot.perpFetchFailed?' — fetch FAILED':''}, Spot: $${(accountSnapshot.spotUsdc||0).toFixed(2)}${accountSnapshot.spotFetchFailed?' — fetch FAILED':''})`;
       await sendTelegram(
         `⚠ Scanning is paused — account equity is $${equityCheck.toFixed(2)} ${breakdown}, below Hyperliquid's $${MIN_ORDER_NOTIONAL} minimum order value. `
         + `No trade could be placed regardless of what the scan finds, so it's skipped entirely (no API cost either) until funded. `
