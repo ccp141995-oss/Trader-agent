@@ -657,8 +657,8 @@
     autoTradeEnabled: localStorage.getItem(LS_KEYS.autoTradeEnabled) === 'true',
     scanMode: localStorage.getItem(LS_KEYS.scanMode) || 'watchlist',
     filteredTopN: parseInt(localStorage.getItem(LS_KEYS.filteredTopN), 10) || 20,
-    filteredMinOI: parseFloat(localStorage.getItem(LS_KEYS.filteredMinOI)) || 1000000,
-    filteredMinVolume24h: parseFloat(localStorage.getItem(LS_KEYS.filteredMinVolume24h)) || 2000000,
+    filteredMinOI: numOrDefault(localStorage.getItem(LS_KEYS.filteredMinOI), 1000000),
+    filteredMinVolume24h: numOrDefault(localStorage.getItem(LS_KEYS.filteredMinVolume24h), 2000000),
     githubRepo: localStorage.getItem(LS_KEYS.githubRepo) || '',
     githubPat: localStorage.getItem(LS_KEYS.githubPat) || '',
     autoPublishConfig: localStorage.getItem(LS_KEYS.autoPublishConfig) === 'true',
@@ -751,6 +751,14 @@
     if(n === undefined || n === null || isNaN(n)) return '—';
     return '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   }
+  function numOrDefault(val, fallback){
+    // `val || fallback` incorrectly treats a legitimate 0 as "unset" since 0 is falsy in JS —
+    // this only falls back on genuinely invalid input (empty string, NaN), preserving an
+    // intentional 0 (e.g. disabling a minimum threshold entirely).
+    const n = parseFloat(val);
+    return isNaN(n) ? fallback : n;
+  }
+
   function fmtNum(n, dp){
     if(n === undefined || n === null || isNaN(n)) return '—';
     dp = dp === undefined ? 4 : dp;
@@ -1043,8 +1051,8 @@
     const withdrawable = state.withdrawable;
     const perpEquity = parseFloat(ms.accountValue) || 0;
     const spotUsdc = await loadSpotUsdcBalance();
-    const usingUnified = perpEquity <= 0 && spotUsdc > 0;
-    const effectiveEquity = perpEquity > 0 ? perpEquity : (spotUsdc || 0);
+    const usingUnified = spotUsdc > perpEquity;
+    const effectiveEquity = Math.max(perpEquity, spotUsdc || 0);
 
     lastAccountValue = effectiveEquity || lastAccountValue;
     lastWithdrawable = usingUnified ? spotUsdc : (isFinite(parseFloat(withdrawable)) ? parseFloat(withdrawable) : lastWithdrawable);
@@ -2073,10 +2081,12 @@
     const data = await infoPost({ type: 'metaAndAssetCtxs' });
     const meta = data[0], ctxs = data[1];
     const rows = [];
+    let totalChecked = 0, delistedSkipped = 0, missingCtx = 0;
     meta.universe.forEach((u, idx) => {
-      if(u.isDelisted) return;
+      if(u.isDelisted){ delistedSkipped++; return; }
       const ctx = ctxs[idx];
-      if(!ctx) return;
+      if(!ctx){ missingCtx++; return; }
+      totalChecked++;
       const mark = parseFloat(ctx.markPx);
       const oiNotional = parseFloat(ctx.openInterest) * mark;
       const vol24h = parseFloat(ctx.dayNtlVlm);
@@ -2085,7 +2095,25 @@
       }
     });
     rows.sort((a,b) => b.vol24h - a.vol24h);
-    return rows.slice(0, cfg.filteredTopN).map(r => r.coin);
+    const result = rows.slice(0, cfg.filteredTopN).map(r => r.coin);
+
+    // Diagnostics: if nothing matched, show real figures for a couple of well-known large-cap
+    // coins so it's obvious whether the computation itself looks right or wrong, rather than
+    // guessing blind.
+    if(!result.length){
+      const sampleNames = ['BTC', 'ETH', 'SOL'];
+      const samples = sampleNames.map(name => {
+        const idx = meta.universe.findIndex(u => u.name === name);
+        if(idx < 0 || !ctxs[idx]) return name + ': not found';
+        const ctx = ctxs[idx];
+        const mark = parseFloat(ctx.markPx);
+        const oi = (parseFloat(ctx.openInterest) * mark).toFixed(0);
+        const vol = parseFloat(ctx.dayNtlVlm).toFixed(0);
+        return `${name}: OI $${oi}, Vol $${vol}`;
+      });
+      log(`Filtered universe: checked ${totalChecked} coins (${delistedSkipped} delisted, ${missingCtx} missing data), 0 matched your thresholds (min OI $${cfg.filteredMinOI}, min Vol $${cfg.filteredMinVolume24h}). For reference — ${samples.join(' · ')}`, 'err');
+    }
+    return result;
   }
 
   async function resolveScanCoins(){
@@ -2996,8 +3024,8 @@
       // publish whatever is currently typed in the modal, without requiring a full save/connect first
       cfg.watchlist = document.getElementById('watchlistInput').value.trim() || cfg.watchlist;
       cfg.filteredTopN = parseInt(document.getElementById('filteredTopNInput').value, 10) || cfg.filteredTopN;
-      cfg.filteredMinOI = parseFloat(document.getElementById('filteredMinOiInput').value) || cfg.filteredMinOI;
-      cfg.filteredMinVolume24h = parseFloat(document.getElementById('filteredMinVolInput').value) || cfg.filteredMinVolume24h;
+      cfg.filteredMinOI = numOrDefault(document.getElementById('filteredMinOiInput').value, cfg.filteredMinOI);
+      cfg.filteredMinVolume24h = numOrDefault(document.getElementById('filteredMinVolInput').value, cfg.filteredMinVolume24h);
       cfg.maxPositionPct = parseFloat(document.getElementById('maxPositionPctInput').value) || cfg.maxPositionPct;
       cfg.maxLeverage = parseFloat(document.getElementById('maxLeverageInput').value) || cfg.maxLeverage;
       cfg.defaultTakeProfitPct = parseFloat(document.getElementById('defaultTakeProfitPctInput').value) || cfg.defaultTakeProfitPct;
@@ -3019,8 +3047,8 @@
       cfg.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
       cfg.watchlist = document.getElementById('watchlistInput').value.trim() || 'BTC,ETH,SOL,HYPE';
       cfg.filteredTopN = parseInt(document.getElementById('filteredTopNInput').value, 10) || 20;
-      cfg.filteredMinOI = parseFloat(document.getElementById('filteredMinOiInput').value) || 1000000;
-      cfg.filteredMinVolume24h = parseFloat(document.getElementById('filteredMinVolInput').value) || 2000000;
+      cfg.filteredMinOI = numOrDefault(document.getElementById('filteredMinOiInput').value, 1000000);
+      cfg.filteredMinVolume24h = numOrDefault(document.getElementById('filteredMinVolInput').value, 2000000);
       cfg.maxPositionPct = parseFloat(document.getElementById('maxPositionPctInput').value) || 5;
       cfg.maxLeverage = parseFloat(document.getElementById('maxLeverageInput').value) || 3;
       cfg.defaultTakeProfitPct = parseFloat(document.getElementById('defaultTakeProfitPctInput').value) || 3;
