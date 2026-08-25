@@ -46,7 +46,7 @@ let MAX_STOP_LOSS_PCT = parseFloat(process.env.MAX_STOP_LOSS_PCT || '5');
 let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
 let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
 const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
-const MAX_RECS_PER_SCAN = 2; // keep only the top-N by confidence, even if more candidates qualify
+let MAX_RECS_PER_SCAN = parseFloat(process.env.MAX_RECS_PER_SCAN || '1'); // keep only the top-N by confidence, even if more candidates qualify
 const AUTO_TRADE_MIN_SCORE = 7; // out of 8 — only the #1-ranked rec, and only above this score, auto-executes
 let MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
 let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
@@ -175,7 +175,26 @@ async function loadFilteredUniverse(){
 
 async function resolveCoins(){
   if(SCAN_MODE === 'filtered') return loadFilteredUniverse();
-  return WATCHLIST;
+
+  // Unlike filtered mode (which only ever sees genuinely perp-listed coins, since
+  // metaAndAssetCtxs is documented as perps-only), the watchlist is just a comma-separated
+  // string typed by hand — nothing stops it from containing a typo, a delisted symbol, or a
+  // spot-only token (Hyperliquid's own PURR, for instance, has no perpetual market at all).
+  // Catching that here, before it burns a full scan cycle, is better than only catching it at
+  // execution time.
+  try{
+    const meta = await infoPost({ type: 'meta' });
+    const validPerps = new Set((meta.universe || []).filter(u => !u.isDelisted).map(u => u.name));
+    const valid = WATCHLIST.filter(c => validPerps.has(c));
+    const invalid = WATCHLIST.filter(c => !validPerps.has(c));
+    if(invalid.length){
+      console.error(`Watchlist contains symbol(s) with no live Hyperliquid perpetual market — skipping: ${invalid.join(', ')}. Check for typos, delistings, or spot-only tokens (e.g. PURR has no perp market at all).`);
+    }
+    return valid;
+  }catch(e){
+    console.error('Could not validate watchlist against live perps universe (' + e.message + ') — proceeding unvalidated; a bad symbol would still be caught at execution time.');
+    return WATCHLIST;
+  }
 }
 
 function sma(arr, period){
@@ -932,7 +951,7 @@ function buildFallbackRecommendations(scanCoins, technicals, maxPositionPct, max
       entry_price: t.lastClose,
       stop_loss_price: null, take_profit_price: null,
       suggested_size_pct_equity: Math.max(1, Math.round((maxPositionPct/2) * 10) / 10),
-      suggested_leverage: 1,
+      suggested_leverage: Math.max(1, Math.round(maxLeverage/2)),
       risk_flags: ['technicals-only fallback — no AI research this cycle']
     };
     rec = resolveRiskLevels(rec, t, maxStopLossPct, defaultTakeProfitPct, MAX_TAKE_PROFIT_PCT, MAX_ENTRY_DEVIATION_PCT);
@@ -1165,7 +1184,7 @@ function formatTelegramMessage(rec){
   lines.push('');
   lines.push('TRADE');
   lines.push(`• Entry ~$${rec.entry_price} · Stop $${rec.stop_loss_price}` + (rec.take_profit_price ? ` · Target $${rec.take_profit_price}` : ''));
-  lines.push(`• Size: ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (capped by your limits at execution)`);
+  lines.push(`• Size: ${rec.suggested_size_pct_equity}% of equity, ${rec.suggested_leverage}x leverage (re-verified against your limits at execution)`);
   if(rec.estimated_notional != null && rec.estimated_margin != null){
     lines.push(`• Est. value: $${rec.estimated_notional.toFixed(2)} notional — cash required: ~$${rec.estimated_margin.toFixed(2)} margin`);
   }
@@ -1200,6 +1219,7 @@ async function main(){
     if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
     if(shared.aiResearchEnabled !== undefined) AI_RESEARCH_ENABLED = !!shared.aiResearchEnabled;
     if(shared.autoTradeEnabled !== undefined) AUTO_TRADE_ENABLED = !!shared.autoTradeEnabled;
+    if(shared.maxRecsPerScan) MAX_RECS_PER_SCAN = parseInt(shared.maxRecsPerScan, 10);
   }
   console.log('AI research is ' + (AI_RESEARCH_ENABLED ? 'ENABLED' : 'DISABLED') + ' this run.');
   console.log('Auto-trade is ' + (AUTO_TRADE_ENABLED ? 'ENABLED — confirmed ideas will execute without a tap' : 'disabled — every idea needs your confirm/deny') + '.');
@@ -1341,6 +1361,17 @@ async function main(){
   newRecs = newRecs.filter(isValidRec);
   if(newRecs.length < beforeValidation){
     console.error(`Dropped ${beforeValidation - newRecs.length} malformed recommendation(s) missing a valid coin/direction/price — this points at an AI response schema issue.`);
+  }
+
+  // The AI should only ever recommend a coin we actually asked it about in this scan's prompt.
+  // If it names something else — a colloquial name, an outdated symbol, a coin from a different
+  // exchange — that's the exact scenario that produces "Unknown asset: undefined" from Hyperliquid
+  // at execution time, since the exchange's own asset-name lookup would fail on that string. Catch
+  // it here, at the source, rather than downstream.
+  const beforeCoinCheck = newRecs.length;
+  newRecs = newRecs.filter(rec => scanCoins.includes(rec.coin));
+  if(newRecs.length < beforeCoinCheck){
+    console.error(`Dropped ${beforeCoinCheck - newRecs.length} recommendation(s) naming a coin outside this scan's actual coin list (${scanCoins.join(', ')}) — likely the AI using an incorrect or unrecognized symbol.`);
   }
 
   if(!usedFallback){

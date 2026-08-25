@@ -325,6 +325,21 @@ async function executeTrade(rec){
     throw new Error('Execution key not configured (HL_AGENT_PRIVATE_KEY / HL_ACCOUNT_ADDRESS missing)');
   }
 
+  // Defense in depth: generation-time validation stops new malformed recs, but an old one
+  // created before that fix (or corrupted in storage) could still be sitting in the feed with
+  // active Confirm/Deny buttons. Catch it here, clearly, before it ever reaches Hyperliquid as
+  // "Unknown asset: undefined" — which is what a missing/undefined coin actually looks like once
+  // it's been concatenated into an asset name and sent to the exchange.
+  if(!rec || typeof rec.coin !== 'string' || !rec.coin.trim()){
+    throw new Error('This recommendation is missing a valid coin — likely a stale/corrupted entry from before a recent fix. Deny it and dismiss it; it cannot be executed.');
+  }
+  if(rec.direction !== 'long' && rec.direction !== 'short'){
+    throw new Error('This recommendation has an invalid direction ("' + rec.direction + '") — likely a stale/corrupted entry. Deny it and dismiss it.');
+  }
+  if(!isFinite(rec.entry_price) || rec.entry_price <= 0 || !isFinite(rec.stop_loss_price) || rec.stop_loss_price <= 0){
+    throw new Error('This recommendation has invalid entry/stop prices — likely a stale/corrupted entry. Deny it and dismiss it.');
+  }
+
   const currentMid = await getCurrentMid(rec.coin);
   if(!currentMid) throw new Error('No live price available for ' + rec.coin);
 
@@ -374,6 +389,15 @@ async function executeTrade(rec){
   if(!size || size <= 0) throw new Error('Computed size was zero — check account equity and risk settings');
 
   const szDecimals = await getSzDecimals(rec.coin);
+  if(szDecimals === undefined){
+    // getSzDecimals returns undefined specifically when the coin isn't found in Hyperliquid's
+    // current asset universe — meaning the AI (or a stale rec) used a name Hyperliquid doesn't
+    // actually recognize. Sending this through anyway is exactly what produces "Unknown asset:
+    // undefined" from the exchange: the SDK's internal name-to-index lookup fails, and the
+    // resulting undefined index is what that error message is actually reporting — not a
+    // problem with rec.coin being missing, which the earlier checks already ruled out.
+    throw new Error(`"${rec.coin}" is not a recognized Hyperliquid asset (checked against the live asset list) — the AI may have used an incorrect, outdated, or delisted symbol. This trade cannot be executed.`);
+  }
   const slippage = 0.03;
   const entryPx = formatHlPrice(isBuy ? currentMid * (1 + slippage) : currentMid * (1 - slippage), szDecimals);
   const stopPx = formatHlPrice(rec.stop_loss_price, szDecimals);
