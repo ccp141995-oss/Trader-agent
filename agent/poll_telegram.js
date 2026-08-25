@@ -159,7 +159,7 @@ async function getEffectiveEquity(){
     getSpotUsdcBalance()
   ]);
   const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
-  const effectiveEquity = perpEquity > 0 ? perpEquity : (spotUsdc || 0);
+  const effectiveEquity = Math.max(perpEquity, spotUsdc || 0);
   return { effectiveEquity, perpEquity, spotUsdc, perpState };
 }
 
@@ -276,7 +276,7 @@ async function getAccountSnapshot(){
     const openPositions = perpState ? (perpState.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0).length : 0;
     const marginUsed = parseFloat(ms.totalMarginUsed);
     const withdrawable = perpState ? parseFloat(perpState.withdrawable) : null;
-    const usingUnified = perpEquity <= 0 && spotUsdc > 0;
+    const usingUnified = spotUsdc > perpEquity;
 
     let lines = [
       `• Account value: $${effectiveEquity != null ? effectiveEquity.toFixed(2) : 'n/a'}${usingUnified ? ' (from Spot/unified balance)' : ''}`,

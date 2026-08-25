@@ -101,7 +101,7 @@ async function loadAccountSnapshot(){
     ]);
     const perpEquity = perpState ? (parseFloat((perpState.marginSummary || {}).accountValue) || 0) : 0;
     const spotUsdc = spotState ? (parseFloat(((spotState.balances || []).find(b => b.coin === 'USDC') || {}).total) || 0) : 0;
-    const effectiveEquity = perpEquity > 0 ? perpEquity : spotUsdc;
+    const effectiveEquity = Math.max(perpEquity, spotUsdc);
     const openPositionCoins = new Set(
       perpState ? (perpState.assetPositions || [])
         .filter(p => parseFloat(p.position.szi) !== 0)
@@ -1151,8 +1151,10 @@ async function main(){
     if(shared.watchlist) WATCHLIST = shared.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
     if(shared.scanMode) SCAN_MODE = shared.scanMode;
     if(shared.filteredTopN) FILTERED_TOP_N = parseInt(shared.filteredTopN, 10);
-    if(shared.filteredMinOI) FILTERED_MIN_OI = parseFloat(shared.filteredMinOI);
-    if(shared.filteredMinVolume24h) FILTERED_MIN_VOLUME_24H = parseFloat(shared.filteredMinVolume24h);
+    // `if(shared.x)` treats a published 0 as "not set" and silently keeps the old value — wrong
+    // for these two specifically, since 0 is a meaningful choice (disable that filter dimension).
+    if(shared.filteredMinOI !== undefined && shared.filteredMinOI !== null) FILTERED_MIN_OI = parseFloat(shared.filteredMinOI);
+    if(shared.filteredMinVolume24h !== undefined && shared.filteredMinVolume24h !== null) FILTERED_MIN_VOLUME_24H = parseFloat(shared.filteredMinVolume24h);
     if(shared.maxStopLossPct) MAX_STOP_LOSS_PCT = parseFloat(shared.maxStopLossPct);
     if(shared.maxTakeProfitPct) MAX_TAKE_PROFIT_PCT = parseFloat(shared.maxTakeProfitPct);
     if(shared.maxEntryDeviationPct) MAX_ENTRY_DEVIATION_PCT = parseFloat(shared.maxEntryDeviationPct);
