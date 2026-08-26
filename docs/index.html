@@ -2182,7 +2182,7 @@
   }
 
   async function resolveScanCoins(){
-    log('resolveScanCoins: cfg.scanMode is currently ' + JSON.stringify(cfg.scanMode), '');
+    log('Scan mode: ' + cfg.scanMode + (cfg.scanMode === 'filtered' ? ` (min OI $${cfg.filteredMinOI}, min vol $${cfg.filteredMinVolume24h}, top ${cfg.filteredTopN})` : ` (${cfg.watchlist})`), 'ok');
     if(cfg.scanMode === 'filtered'){
       const coins = await loadFilteredUniverse();
       if(!coins.length) log('Filtered universe returned no coins — thresholds may be too strict', 'err');
