@@ -768,6 +768,17 @@
     return rounded;
   }
 
+  // Hyperliquid enforces a maximum number of decimal places for the SIZE field too, per asset —
+  // simply szDecimals itself, unlike price which has the extra 5-significant-figure rule. A raw
+  // notional/price division (e.g. 1.26925) can easily exceed that, causing "Order has invalid
+  // size" — the exact same class of bug formatHlPrice already fixed for prices, just never
+  // applied to size.
+  function formatHlSize(size, szDecimals){
+    if(szDecimals == null) return parseFloat(size.toFixed(4)); // conservative fallback
+    const factor = Math.pow(10, szDecimals);
+    return Math.round(size * factor) / factor;
+  }
+
   function log(msg, kind){
     const box = document.getElementById('logBox');
     const line = document.createElement('div');
@@ -1197,15 +1208,16 @@
       log('Submitting '+(isBuy?'BUY':'SELL')+' '+sz+' '+currentCoin+' @ '+limitPx.toFixed(2)+' ('+tif+')…');
       const szDecimals = await getSzDecimals(currentCoin);
       const roundedLimitPx = formatHlPrice(limitPx, szDecimals);
+      const roundedSz = formatHlSize(sz, szDecimals);
       const orders = [{
-        coin: currentCoin + '-PERP', is_buy: isBuy, sz: sz,
+        coin: currentCoin + '-PERP', is_buy: isBuy, sz: roundedSz,
         limit_px: roundedLimitPx,
         order_type: { limit: { tif: tif } }, reduce_only: reduceOnly
       }];
       if(stopLossInput && stopLossInput > 0){
         const stopPx = formatHlPrice(stopLossInput, szDecimals);
         orders.push({
-          coin: currentCoin + '-PERP', is_buy: !isBuy, sz: sz,
+          coin: currentCoin + '-PERP', is_buy: !isBuy, sz: roundedSz,
           limit_px: stopPx,
           order_type: { trigger: { isMarket: true, triggerPx: String(stopPx), tpsl: 'sl' } },
           reduce_only: true
@@ -1214,7 +1226,7 @@
       if(takeProfitInput && takeProfitInput > 0){
         const tpPx = formatHlPrice(takeProfitInput, szDecimals);
         orders.push({
-          coin: currentCoin + '-PERP', is_buy: !isBuy, sz: sz,
+          coin: currentCoin + '-PERP', is_buy: !isBuy, sz: roundedSz,
           limit_px: tpPx,
           order_type: { trigger: { isMarket: true, triggerPx: String(tpPx), tpsl: 'tp' } },
           reduce_only: true
@@ -2805,12 +2817,13 @@
       }
       const roundedEntryPx = formatHlPrice(entryPx, szDecimals);
       const roundedStopPx = formatHlPrice(stopLoss, szDecimals);
+      const roundedSize = formatHlSize(size, szDecimals);
       const orders = [{
-        coin: coin + '-PERP', is_buy: isBuy, sz: size,
+        coin: coin + '-PERP', is_buy: isBuy, sz: roundedSize,
         limit_px: roundedEntryPx,
         order_type: { limit: { tif: entryTif } }, reduce_only: false
       }, {
-        coin: coin + '-PERP', is_buy: !isBuy, sz: size,
+        coin: coin + '-PERP', is_buy: !isBuy, sz: roundedSize,
         limit_px: roundedStopPx,
         order_type: { trigger: { isMarket: true, triggerPx: String(roundedStopPx), tpsl: 'sl' } },
         reduce_only: true
@@ -2818,14 +2831,14 @@
       if(takeProfit){
         const roundedTpPx = formatHlPrice(takeProfit, szDecimals);
         orders.push({
-          coin: coin + '-PERP', is_buy: !isBuy, sz: size,
+          coin: coin + '-PERP', is_buy: !isBuy, sz: roundedSize,
           limit_px: roundedTpPx,
           order_type: { trigger: { isMarket: true, triggerPx: String(roundedTpPx), tpsl: 'tp' } },
           reduce_only: true
         });
       }
 
-      log('Placing agent trade: '+(isBuy?'BUY':'SELL')+' '+size+' '+coin+' with stop @ '+stopLoss+(takeProfit?' / take-profit @ '+takeProfit:'')+'…');
+      log('Placing agent trade: '+(isBuy?'BUY':'SELL')+' '+roundedSize+' '+coin+' with stop @ '+stopLoss+(takeProfit?' / take-profit @ '+takeProfit:'')+'…');
       // Full diagnostic dump of the exact payload — after several rounds of theorizing about
       // "Unknown asset: undefined" without a definitive answer, the next occurrence needs to
       // show real data instead of another guess.
