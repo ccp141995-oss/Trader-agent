@@ -2760,6 +2760,12 @@
       const takeProfit = parseFloat(document.getElementById('confTakeProfit').value) || null;
       let entryPx = parseFloat(document.getElementById('confEntryPrice').value);
 
+      if(!isFinite(size) || size <= 0 || !isFinite(stopLoss) || stopLoss <= 0 || !isFinite(entryPx) || entryPx <= 0){
+        setExecuteStatus('⚠ Invalid size/price values in the form — check the Size, Entry, and Stop-loss fields.', 'bad');
+        btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
+        return;
+      }
+
       let entryTif = 'Gtc';
       if(entryType === 'market'){
         const mid = lastMids[coin] ? parseFloat(lastMids[coin]) : entryPx;
@@ -2801,12 +2807,24 @@
       }
 
       log('Placing agent trade: '+(isBuy?'BUY':'SELL')+' '+size+' '+coin+' with stop @ '+stopLoss+(takeProfit?' / take-profit @ '+takeProfit:'')+'…');
-      const result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
-      log('Agent trade response: ' + JSON.stringify(result).slice(0,160), 'ok');
+      // Full diagnostic dump of the exact payload — after several rounds of theorizing about
+      // "Unknown asset: undefined" without a definitive answer, the next occurrence needs to
+      // show real data instead of another guess.
+      log('DIAGNOSTIC — full order payload: ' + JSON.stringify(orders), '');
+      let result;
+      try{
+        result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
+      }catch(sdkError){
+        log('DIAGNOSTIC — sdk.exchange.placeOrder threw: ' + sdkError.message + (sdkError.stack ? ('\n' + sdkError.stack) : ''), 'err');
+        setExecuteStatus('⚠ SDK error: ' + sdkError.message, 'bad');
+        return;
+      }
+      log('Agent trade response: ' + JSON.stringify(result), 'ok');
 
       const apiError = result && result.response && result.response.data && result.response.data.statuses &&
         result.response.data.statuses.find(s => s.error);
       if(apiError){
+        log('DIAGNOSTIC — order rejected. Payload sent: ' + JSON.stringify(orders) + ' | Full response: ' + JSON.stringify(result), 'err');
         setExecuteStatus('⚠ Exchange rejected the order: ' + apiError.error, 'bad');
         return;
       }
