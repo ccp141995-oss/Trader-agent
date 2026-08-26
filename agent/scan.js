@@ -1223,6 +1223,7 @@ async function main(){
   }
   console.log('AI research is ' + (AI_RESEARCH_ENABLED ? 'ENABLED' : 'DISABLED') + ' this run.');
   console.log('Auto-trade is ' + (AUTO_TRADE_ENABLED ? 'ENABLED — confirmed ideas will execute without a tap' : 'disabled — every idea needs your confirm/deny') + '.');
+  console.log(`Scan mode: ${SCAN_MODE} (source: ${shared && shared.scanMode ? 'dashboard-published config' : 'GitHub Variable / default'})` + (SCAN_MODE === 'filtered' ? ` — min OI $${FILTERED_MIN_OI}, min vol $${FILTERED_MIN_VOLUME_24H}, top ${FILTERED_TOP_N}` : ` — watchlist: ${WATCHLIST.join(', ')}`));
 
   // The circuit breaker (equity drawdown detection + emergency close-all) is checked and acted
   // on by poll_telegram.js, which has execution capability. This scanner only needs to respect
