@@ -8,6 +8,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "hyperliquid": "^1.7.5"
+    "hyperliquid": "^1.7.7"
   }
 }
