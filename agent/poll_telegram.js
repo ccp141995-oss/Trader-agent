@@ -158,7 +158,11 @@ async function buildExecutionSdk(){
     enableWs: false,
     privateKey: HL_AGENT_PRIVATE_KEY,
     testnet: HL_EXEC_NETWORK !== 'mainnet',
-    walletAddress: HL_ACCOUNT_ADDRESS
+    walletAddress: HL_ACCOUNT_ADDRESS,
+    // Explicitly null: the SDK otherwise falls back to using the wallet address derived from
+    // the private key as a vault address, which Hyperliquid rejects with "Vault not registered"
+    // since an agent wallet is not a vault.
+    vaultAddress: null
   });
   // The SDK requires explicit initialization before its internal asset-index resolution works —
   // confirmed from its own docs: "In most cases the SDK will automatically initialize itself
@@ -178,6 +182,14 @@ async function buildExecutionSdk(){
     }
   }
   if(!warmupOk) throw (lastWarmupError || new Error('SDK initialization failed'));
+  // "Vault not registered" means a vaultAddress is being attached to the signed action. Passing
+  // vaultAddress:null as a constructor option and per-call parameter isn't always enough, so
+  // clear the instance properties directly as well.
+  try{
+    sdk.vaultAddress = null;
+    if(sdk.exchange && 'vaultAddress' in sdk.exchange) sdk.exchange.vaultAddress = null;
+    if(sdk.exchange && sdk.exchange.parent && 'vaultAddress' in sdk.exchange.parent) sdk.exchange.parent.vaultAddress = null;
+  }catch(e){ console.error('Could not clear vaultAddress:', e.message); }
   return sdk;
 }
 
@@ -356,6 +368,12 @@ async function getAccountSnapshot(){
 
 function describeOrderResult(result, labels){
   try{
+    // Top-level rejection shape: {status:'err', response:'<message>'} — must be reported as a
+    // failure rather than falling through to "format not recognized".
+    if(result && result.status === 'err'){
+      const msg = typeof result.response === 'string' ? result.response : JSON.stringify(result.response);
+      return ['• ORDER REJECTED — ' + msg];
+    }
     const statuses = result && result.response && result.response.data && result.response.data.statuses;
     if(!Array.isArray(statuses)){
       return ['• Order response format not recognized — raw: ' + JSON.stringify(result).slice(0,200)];
@@ -484,7 +502,7 @@ async function executeTrade(rec){
 
   let result;
   try{
-    result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
+    result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl', vaultAddress: null });
   }catch(sdkError){
     // Self-healing: if this is specifically the asset-index resolution failure, force a fresh
     // refresh of the SDK's internal symbol-conversion cache and retry once, right at the point
@@ -494,10 +512,15 @@ async function executeTrade(rec){
       if(typeof sdk.connect === 'function') await sdk.connect();
       if(typeof sdk.refreshAssetMapsNow === 'function') await sdk.refreshAssetMapsNow();
       else if(sdk.info && sdk.info.perpetuals) await sdk.info.perpetuals.getMeta();
-      result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
+      result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl', vaultAddress: null });
     } else {
       throw sdkError;
     }
+  }
+  // A top-level {status:'err'} means the whole request was rejected (e.g. "Vault not
+  // registered") — throw so it's reported as a failure rather than a successful execution.
+  if(result && result.status === 'err'){
+    throw new Error(typeof result.response === 'string' ? result.response : JSON.stringify(result.response));
   }
   return { result, size, entryPx, leverage, pctEquity, sizeBumped, exceedsPositionCap };
 }
