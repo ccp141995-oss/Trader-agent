@@ -12,7 +12,7 @@
   "maxEntryDeviationPct": 2,
   "circuitBreakerDrawdownPct": 25,
   "maxRecsPerScan": 1,
-  "aiResearchEnabled": false,
-  "autoTradeEnabled": false,
-  "updated_at": "2026-08-26T00:24:13.993Z"
+  "aiResearchEnabled": true,
+  "autoTradeEnabled": true,
+  "updated_at": "2026-08-26T00:25:24.700Z"
 }
