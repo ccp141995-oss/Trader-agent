@@ -3079,6 +3079,22 @@
         testnet: cfg.network !== 'mainnet',
         walletAddress: cfg.address
       });
+
+      // The SDK's own internal name-to-asset-index resolution (used inside placeOrder and
+      // cancelOrder) needs this called at least once to populate its internal metadata — our
+      // code has always used its own separate fetch()-based calls for every info query,
+      // entirely bypassing the SDK's own info methods, meaning that internal map was never
+      // getting populated at all. This is the actual, confirmed cause of "Unknown asset:
+      // undefined" — verified directly from a stack trace showing the failure inside the SDK's
+      // own getAssetIndex() method, for BTC specifically, which rules out every previous theory
+      // about the coin itself being invalid. Retried a couple of times since a transient blip
+      // here would otherwise permanently block trading until a manual reconnect.
+      let metaWarmupOk = false;
+      for(let attempt = 1; attempt <= 3 && !metaWarmupOk; attempt++){
+        try{ await sdk.info.perpetuals.getMeta(); metaWarmupOk = true; }
+        catch(e){ if(attempt < 3) await new Promise(r => setTimeout(r, attempt * 800)); else throw e; }
+      }
+
       connected = true;
       document.getElementById('liveDot').classList.add('live');
       badge.textContent = (cfg.network === 'mainnet' ? 'Mainnet' : 'Testnet') + ' · Verifying…';
