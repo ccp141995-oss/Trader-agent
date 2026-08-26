@@ -2826,25 +2826,44 @@
       try{
         result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
       }catch(sdkError){
-        // Self-healing: if this is specifically the asset-index resolution failure, force a
-        // fresh refresh of the SDK's internal symbol-conversion cache and retry once, right at
-        // the point of failure — regardless of whether the exact refresh method needed matches
-        // what connect() already tried, this retries in the most direct context possible.
         if(String(sdkError.message || '').includes('Unknown asset')){
-          log('DIAGNOSTIC — asset resolution failed, re-initializing SDK and retrying once…', 'err');
+          // Report exactly what this SDK build actually exposes, rather than inferring from
+          // timing. Previous rounds guessed at connect()/refreshAssetMapsNow()/getMeta() and
+          // each retry completed within the same second, strongly implying none of them exist
+          // on this build — this makes that concrete instead of inferred.
+          let shape = [];
           try{
-            if(typeof sdk.connect === 'function') await sdk.connect();
-            if(typeof sdk.refreshAssetMapsNow === 'function') await sdk.refreshAssetMapsNow();
-            else if(sdk.info && sdk.info.perpetuals) await sdk.info.perpetuals.getMeta();
-            result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
+            shape.push('sdk keys=[' + Object.keys(sdk).join(',') + ']');
+            shape.push('proto=[' + Object.getOwnPropertyNames(Object.getPrototypeOf(sdk) || {}).join(',') + ']');
+            shape.push('connect=' + typeof sdk.connect);
+            shape.push('refreshAssetMapsNow=' + typeof sdk.refreshAssetMapsNow);
+            shape.push('initialize=' + typeof sdk.initialize);
+            shape.push('ensureInitialized=' + typeof sdk.ensureInitialized);
+            shape.push('info=' + typeof sdk.info);
+            if(sdk.info) shape.push('info keys=[' + Object.keys(sdk.info).join(',') + ']');
+            if(sdk.symbolConversion) shape.push('symbolConversion keys=[' + Object.keys(sdk.symbolConversion).join(',') + ']');
+          }catch(introspectErr){ shape.push('introspection failed: ' + introspectErr.message); }
+          log('DIAGNOSTIC — SDK shape: ' + shape.join(' | '), 'err');
+
+          // Fallback: the SDK's "-PERP" suffix is its own naming convention layered on top of
+          // Hyperliquid's native names (which are just "SOL", "BTC"). If its symbol-conversion
+          // map is unavailable, passing the native name directly may bypass that lookup path.
+          try{
+            log('DIAGNOSTIC — retrying with bare symbol names instead of the -PERP suffix…', 'err');
+            const bareOrders = orders.map(o => Object.assign({}, o, { coin: String(o.coin).replace(/-PERP$/, '') }));
+            log('DIAGNOSTIC — bare-symbol payload: ' + JSON.stringify(bareOrders), '');
+            result = await sdk.exchange.placeOrder({ orders: bareOrders, grouping: 'normalTpsl' });
+            log('Bare-symbol retry succeeded — the -PERP suffix was the problem on this SDK build.', 'ok');
           }catch(retryError){
-            log('DIAGNOSTIC — retry also failed: ' + retryError.message + (retryError.stack ? ('\n' + retryError.stack) : ''), 'err');
-            setExecuteStatus('⚠ SDK error (after retry): ' + retryError.message, 'bad');
+            log('DIAGNOSTIC — bare-symbol retry also failed: ' + retryError.message, 'err');
+            setExecuteStatus('⚠ Could not place the order: ' + retryError.message + '. The SDK shape diagnostic above shows what this build exposes — please share that log line.', 'bad');
+            btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
             return;
           }
         } else {
           log('DIAGNOSTIC — sdk.exchange.placeOrder threw: ' + sdkError.message + (sdkError.stack ? ('\n' + sdkError.stack) : ''), 'err');
           setExecuteStatus('⚠ SDK error: ' + sdkError.message, 'bad');
+          btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
           return;
         }
       }
