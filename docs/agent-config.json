@@ -6,13 +6,13 @@
   "filteredMinVolume24h": 200000,
   "maxPositionPct": 25,
   "maxLeverage": 10,
-  "defaultTakeProfitPct": 50,
+  "defaultTakeProfitPct": 100,
   "maxStopLossPct": 20,
-  "maxTakeProfitPct": 100,
+  "maxTakeProfitPct": 150,
   "maxEntryDeviationPct": 2,
   "circuitBreakerDrawdownPct": 25,
   "maxRecsPerScan": 1,
   "aiResearchEnabled": false,
   "autoTradeEnabled": false,
-  "updated_at": "2026-08-26T04:47:20.321Z"
+  "updated_at": "2026-08-26T04:56:32.719Z"
 }
