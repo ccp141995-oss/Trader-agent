@@ -83,13 +83,21 @@ async function infoPost(body){
 let szDecimalsCache = null;
 async function getSzDecimals(coin){
   if(!szDecimalsCache){
-    try{
-      const meta = await infoPost({ type: 'meta' });
-      szDecimalsCache = {};
-      (meta.universe || []).forEach(u => { szDecimalsCache[u.name] = u.szDecimals; });
-    }catch(e){
-      console.error('Could not fetch szDecimals metadata, falling back to 2-decimal price rounding:', e.message);
-      szDecimalsCache = {};
+    // A failed fetch must NOT cache an empty-but-truthy {} — that permanently poisons every
+    // future lookup for the rest of this process's life (since `if(!szDecimalsCache)` is false
+    // for an empty object), silently making every coin look "unrecognized" after one transient
+    // network hiccup.
+    for(let attempt = 1; attempt <= 3; attempt++){
+      try{
+        const meta = await infoPost({ type: 'meta' });
+        const map = {};
+        (meta.universe || []).forEach(u => { map[u.name] = u.szDecimals; });
+        szDecimalsCache = map;
+        break;
+      }catch(e){
+        if(attempt < 3){ await new Promise(r => setTimeout(r, attempt * 800)); }
+        else{ console.error('Could not fetch szDecimals metadata after retries:', e.message); return undefined; }
+      }
     }
   }
   return szDecimalsCache[coin];
@@ -134,6 +142,47 @@ async function editStatusMessage(rec, text){
 async function getCurrentMid(coin){
   const mids = await infoPost({ type: 'allMids' });
   return mids[coin] ? parseFloat(mids[coin]) : null;
+}
+
+// Every place that constructs the SDK for execution must go through this — the SDK's own
+// internal name-to-asset-index resolution (used by placeOrder/cancelOrder) needs its metadata
+// populated via sdk.info.perpetuals.getMeta() first. Our code has always used its own separate
+// fetch()-based infoPost() for every read (balances, candles, etc.), entirely bypassing the
+// SDK's own info methods — meaning that internal map was never being populated at all, and
+// every single order was failing with "Unknown asset: undefined" as a result, regardless of
+// which coin. Confirmed directly from a stack trace showing the failure inside the SDK's own
+// getAssetIndex() method, for BTC — about as unambiguously real an asset as exists on this
+// exchange, ruling out every previous theory about the coin itself being invalid.
+async function buildExecutionSdk(){
+  const sdk = new Hyperliquid({
+    enableWs: false,
+    privateKey: HL_AGENT_PRIVATE_KEY,
+    testnet: HL_EXEC_NETWORK !== 'mainnet',
+    walletAddress: HL_ACCOUNT_ADDRESS
+  });
+  // sdk.info.perpetuals.getMeta() (the previous attempt) is a plain data-fetching method,
+  // unrelated to the SDK's internal "SymbolConversion" cache that getAssetIndex() actually
+  // reads from. refreshAssetMapsNow() is the SDK's own documented method for forcing that
+  // cache to populate synchronously, rather than waiting on its automatic 60s background timer.
+  // Falls back to the old call defensively, in case the exact method differs by SDK version.
+  let warmupOk = false, lastWarmupError = null;
+  for(let attempt = 1; attempt <= 3 && !warmupOk; attempt++){
+    try{
+      if(typeof sdk.refreshAssetMapsNow === 'function'){
+        await sdk.refreshAssetMapsNow();
+      } else if(sdk.info && sdk.info.perpetuals && typeof sdk.info.perpetuals.getMeta === 'function'){
+        await sdk.info.perpetuals.getMeta();
+      } else {
+        throw new Error('Neither refreshAssetMapsNow() nor info.perpetuals.getMeta() exist on this SDK build.');
+      }
+      warmupOk = true;
+    }catch(e){
+      lastWarmupError = e;
+      if(attempt < 3) await new Promise(r => setTimeout(r, attempt * 800));
+    }
+  }
+  if(!warmupOk) throw lastWarmupError;
+  return sdk;
 }
 
 async function getSpotUsdcBalance(){
@@ -217,6 +266,13 @@ async function recordEquityAndCheckDrawdown(){
 // individual order fails, and reports exactly what succeeded/failed rather than assuming.
 async function closeEverythingAndCancelAll(){
   const results = { closedPositions: [], failedPositions: [], cancelledOrders: 0, failedCancels: 0 };
+  let sdk;
+  try{
+    sdk = await buildExecutionSdk();
+  }catch(e){
+    results.failedPositions.push('Could not initialize execution SDK: ' + e.message);
+    return results;
+  }
   try{
     const state = await infoPost({ type: 'clearinghouseState', user: HL_ACCOUNT_ADDRESS });
     const openPositions = (state.assetPositions || []).filter(p => parseFloat(p.position.szi) !== 0);
@@ -428,14 +484,24 @@ async function executeTrade(rec){
     rec.take_profit_price = tpPx;
   }
 
-  const sdk = new Hyperliquid({
-    enableWs: false,
-    privateKey: HL_AGENT_PRIVATE_KEY,
-    testnet: HL_EXEC_NETWORK !== 'mainnet',
-    walletAddress: HL_ACCOUNT_ADDRESS
-  });
+  const sdk = await buildExecutionSdk();
 
-  const result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
+  let result;
+  try{
+    result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
+  }catch(sdkError){
+    // Self-healing: if this is specifically the asset-index resolution failure, force a fresh
+    // refresh of the SDK's internal symbol-conversion cache and retry once, right at the point
+    // of failure — regardless of whether the exact refresh method needed matches what
+    // buildExecutionSdk() already tried, this retries in the most direct context possible.
+    if(String(sdkError.message || '').includes('Unknown asset')){
+      if(typeof sdk.refreshAssetMapsNow === 'function') await sdk.refreshAssetMapsNow();
+      else if(sdk.info && sdk.info.perpetuals) await sdk.info.perpetuals.getMeta();
+      result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
+    } else {
+      throw sdkError;
+    }
+  }
   return { result, size, entryPx, leverage, pctEquity, sizeBumped, exceedsPositionCap };
 }
 
