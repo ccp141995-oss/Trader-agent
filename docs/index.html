@@ -1120,6 +1120,10 @@
   // ---------------- Trading actions ----------------
   async function ensureSdk(){
     if(!sdk){ throw new Error('Not connected — open Settings and connect an account.'); }
+    // Guarantees the SDK's internal asset-index map is populated before any order call —
+    // covers the manual ticket and position-closing paths, not just agent confirmations.
+    const sc = sdk.symbolConversion || (sdk.info && sdk.info.symbolConversion);
+    if(sc && mapSize(sc.assetToIndexMap) === 0){ await ensureSdkAssetMaps(); }
   }
 
   function updateTicketNotional(){
@@ -1258,7 +1262,7 @@
     const originalLabel = btnEl ? btnEl.textContent : null;
     if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Closing…'; btnEl.style.borderColor=''; btnEl.style.color=''; btnEl.title=''; }
     try{
-      if(!sdk){ throw new Error('Not connected — open Settings and connect an account.'); }
+      await ensureSdk();
       const szi = parseFloat(sziRaw);
       const isBuy = szi < 0; // close a short by buying, close a long by selling
       const mid = lastMids[coin] ? parseFloat(lastMids[coin]) : null;
@@ -2827,36 +2831,22 @@
         result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
       }catch(sdkError){
         if(String(sdkError.message || '').includes('Unknown asset')){
-          // Report exactly what this SDK build actually exposes, rather than inferring from
-          // timing. Previous rounds guessed at connect()/refreshAssetMapsNow()/getMeta() and
-          // each retry completed within the same second, strongly implying none of them exist
-          // on this build — this makes that concrete instead of inferred.
-          let shape = [];
+          // The SDK's internal asset-index map is empty — repair it directly, then retry the
+          // original payload unchanged. This is the same repair connect() performs; doing it
+          // again here covers the case where the map got cleared or expired mid-session.
+          log('Asset index lookup failed — repairing the SDK asset map and retrying…', 'err');
+          const repaired = await ensureSdkAssetMaps();
+          if(!repaired){
+            setExecuteStatus('⚠ Could not place the order: the SDK asset map could not be populated. Check the Activity Log for details.', 'bad');
+            btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
+            return;
+          }
           try{
-            shape.push('sdk keys=[' + Object.keys(sdk).join(',') + ']');
-            shape.push('proto=[' + Object.getOwnPropertyNames(Object.getPrototypeOf(sdk) || {}).join(',') + ']');
-            shape.push('connect=' + typeof sdk.connect);
-            shape.push('refreshAssetMapsNow=' + typeof sdk.refreshAssetMapsNow);
-            shape.push('initialize=' + typeof sdk.initialize);
-            shape.push('ensureInitialized=' + typeof sdk.ensureInitialized);
-            shape.push('info=' + typeof sdk.info);
-            if(sdk.info) shape.push('info keys=[' + Object.keys(sdk.info).join(',') + ']');
-            if(sdk.symbolConversion) shape.push('symbolConversion keys=[' + Object.keys(sdk.symbolConversion).join(',') + ']');
-          }catch(introspectErr){ shape.push('introspection failed: ' + introspectErr.message); }
-          log('DIAGNOSTIC — SDK shape: ' + shape.join(' | '), 'err');
-
-          // Fallback: the SDK's "-PERP" suffix is its own naming convention layered on top of
-          // Hyperliquid's native names (which are just "SOL", "BTC"). If its symbol-conversion
-          // map is unavailable, passing the native name directly may bypass that lookup path.
-          try{
-            log('DIAGNOSTIC — retrying with bare symbol names instead of the -PERP suffix…', 'err');
-            const bareOrders = orders.map(o => Object.assign({}, o, { coin: String(o.coin).replace(/-PERP$/, '') }));
-            log('DIAGNOSTIC — bare-symbol payload: ' + JSON.stringify(bareOrders), '');
-            result = await sdk.exchange.placeOrder({ orders: bareOrders, grouping: 'normalTpsl' });
-            log('Bare-symbol retry succeeded — the -PERP suffix was the problem on this SDK build.', 'ok');
+            result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
+            log('Retry after asset-map repair succeeded.', 'ok');
           }catch(retryError){
-            log('DIAGNOSTIC — bare-symbol retry also failed: ' + retryError.message, 'err');
-            setExecuteStatus('⚠ Could not place the order: ' + retryError.message + '. The SDK shape diagnostic above shows what this build exposes — please share that log line.', 'bad');
+            log('DIAGNOSTIC — retry after asset-map repair still failed: ' + retryError.message + (retryError.stack ? ('\n' + retryError.stack) : ''), 'err');
+            setExecuteStatus('⚠ Could not place the order: ' + retryError.message, 'bad');
             btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
             return;
           }
@@ -3114,6 +3104,62 @@
   }
 
   // ---------------- Connection lifecycle ----------------
+  // The SDK resolves coin names to numeric asset indices via its internal symbolConversion
+  // maps. On this build those maps were never getting populated (confirmed from a diagnostic
+  // dump of the SDK's internals), so every placeOrder failed with "Unknown asset: undefined" —
+  // the undefined being the *resolved index*, not the coin name we passed. The SDK's own
+  // refresh method (refreshAssetMapsNow) doesn't exist on this version, so this populates the
+  // maps directly using the same metadata endpoint the rest of the dashboard already uses
+  // successfully. Named exactly as the SDK does internally: assetToIndexMap keyed by the SDK's
+  // "-PERP" convention, and exchangeToInternalNameMap mapping native names to that convention.
+  function mapSize(m){
+    if(!m) return 0;
+    if(typeof m.size === 'number') return m.size;
+    return Object.keys(m).length;
+  }
+  function mapSet(m, key, val){
+    if(!m) return;
+    if(typeof m.set === 'function') m.set(key, val);
+    else m[key] = val;
+  }
+
+  async function ensureSdkAssetMaps(){
+    if(!sdk) return false;
+    const sc = sdk.symbolConversion || (sdk.info && sdk.info.symbolConversion);
+    if(!sc){ log('SDK asset map: symbolConversion not found on this build.', 'err'); return false; }
+
+    // Give the SDK's own initializer a chance first, if it exposes one.
+    try{
+      if(typeof sc.initialize === 'function' && !sc.initialized) await sc.initialize();
+    }catch(e){ /* fall through to manual population below */ }
+
+    let count = mapSize(sc.assetToIndexMap);
+    if(count > 0){
+      log('SDK asset map already populated (' + count + ' entries).', 'ok');
+      return true;
+    }
+
+    // Populate manually from the perps metadata endpoint.
+    try{
+      const meta = await infoPost({ type: 'meta' });
+      const universe = (meta && meta.universe) || [];
+      if(!universe.length) throw new Error('meta returned an empty universe');
+      universe.forEach((u, idx) => {
+        // Perp asset index is simply the position in the universe array.
+        mapSet(sc.assetToIndexMap, u.name + '-PERP', idx);
+        mapSet(sc.assetToIndexMap, u.name, idx); // tolerate bare names too
+        mapSet(sc.exchangeToInternalNameMap, u.name, u.name + '-PERP');
+      });
+      sc.initialized = true;
+      count = mapSize(sc.assetToIndexMap);
+      log('SDK asset map was empty — populated it manually with ' + count + ' entries (e.g. BTC-PERP=' + (typeof sc.assetToIndexMap.get === 'function' ? sc.assetToIndexMap.get('BTC-PERP') : sc.assetToIndexMap['BTC-PERP']) + ').', 'ok');
+      return true;
+    }catch(e){
+      log('Could not populate SDK asset map: ' + e.message, 'err');
+      return false;
+    }
+  }
+
   async function connect(){
     if(!cfg.address || !cfg.agentKey){
       document.getElementById('netBadge').textContent = 'Disconnected';
@@ -3151,19 +3197,7 @@
         }
       }
       log('SDK init: connect=' + (typeof sdk.connect) + ', refreshAssetMapsNow=' + (typeof sdk.refreshAssetMapsNow) + ', initialized=' + initOk, initOk ? 'ok' : 'err');
-      // getAllAssets() reports what the SDK's own internal asset map actually contains — this
-      // shows directly whether that map is populated (and in what name format) rather than
-      // inferring it from a failed order.
-      try{
-        if(sdk.custom && typeof sdk.custom.getAllAssets === 'function'){
-          const assets = sdk.custom.getAllAssets();
-          const perpList = (assets && assets.perp) || [];
-          const spotList = (assets && assets.spot) || [];
-          log('SDK asset map: ' + perpList.length + ' perps, ' + spotList.length + ' spot. First few perps: ' + perpList.slice(0,5).join(', '), perpList.length ? 'ok' : 'err');
-        } else {
-          log('SDK asset map: custom.getAllAssets() not available on this build.', 'err');
-        }
-      }catch(e){ log('SDK asset map check failed: ' + e.message, 'err'); }
+      await ensureSdkAssetMaps();
       if(!initOk) throw (lastWarmupError || new Error('SDK initialization failed'));
 
       connected = true;
