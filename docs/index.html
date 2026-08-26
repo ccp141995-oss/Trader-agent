@@ -2831,8 +2831,9 @@
         // the point of failure — regardless of whether the exact refresh method needed matches
         // what connect() already tried, this retries in the most direct context possible.
         if(String(sdkError.message || '').includes('Unknown asset')){
-          log('DIAGNOSTIC — asset resolution failed, forcing a fresh refresh and retrying once…', 'err');
+          log('DIAGNOSTIC — asset resolution failed, re-initializing SDK and retrying once…', 'err');
           try{
+            if(typeof sdk.connect === 'function') await sdk.connect();
             if(typeof sdk.refreshAssetMapsNow === 'function') await sdk.refreshAssetMapsNow();
             else if(sdk.info && sdk.info.perpetuals) await sdk.info.perpetuals.getMeta();
             result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
@@ -3108,31 +3109,30 @@
         walletAddress: cfg.address
       });
 
-      // The previous fix called sdk.info.perpetuals.getMeta() — a plain data-fetching method
-      // entirely unrelated to the SDK's internal "SymbolConversion" cache that getAssetIndex()
-      // actually reads from. Confirmed directly from the SDK's own documentation: it maintains
-      // this cache via an automatic background refresh (every 60s) that may not have completed
-      // by the time an order is placed, and refreshAssetMapsNow() is the SDK's own documented
-      // method for forcing that refresh synchronously before proceeding. Falling back to the
-      // old call too, defensively, in case the exact method available differs by SDK version.
-      let metaWarmupOk = false;
+      // The SDK requires explicit initialization before its internal asset-index resolution
+      // works — confirmed from its own docs: "In most cases the SDK will automatically
+      // initialize itself when required. However, in some cases you may need to explicitly
+      // initialize the SDK: await sdk.connect()". This is almost certainly the missing piece:
+      // previous attempts to refresh the asset map completed instantly (identical log
+      // timestamps), which means those methods didn't exist yet on an uninitialized instance.
+      // connect() works with enableWs:false too — it initializes the SDK, not just websockets.
+      let initOk = false;
       let lastWarmupError = null;
-      for(let attempt = 1; attempt <= 3 && !metaWarmupOk; attempt++){
+      for(let attempt = 1; attempt <= 3 && !initOk; attempt++){
         try{
-          if(typeof sdk.refreshAssetMapsNow === 'function'){
-            await sdk.refreshAssetMapsNow();
-          } else if(sdk.info && sdk.info.perpetuals && typeof sdk.info.perpetuals.getMeta === 'function'){
-            await sdk.info.perpetuals.getMeta();
-          } else {
-            throw new Error('Neither refreshAssetMapsNow() nor info.perpetuals.getMeta() exist on this SDK build.');
-          }
-          metaWarmupOk = true;
+          if(typeof sdk.connect === 'function') await sdk.connect();
+          // Now that the SDK is initialized, force its symbol-conversion cache to populate
+          // rather than waiting on the automatic 60s background refresh.
+          if(typeof sdk.refreshAssetMapsNow === 'function') await sdk.refreshAssetMapsNow();
+          else if(sdk.info && sdk.info.perpetuals && typeof sdk.info.perpetuals.getMeta === 'function') await sdk.info.perpetuals.getMeta();
+          initOk = true;
         }catch(e){
           lastWarmupError = e;
           if(attempt < 3) await new Promise(r => setTimeout(r, attempt * 800));
         }
       }
-      if(!metaWarmupOk) throw lastWarmupError;
+      log('SDK init: connect=' + (typeof sdk.connect) + ', refreshAssetMapsNow=' + (typeof sdk.refreshAssetMapsNow) + ', initialized=' + initOk, initOk ? 'ok' : 'err');
+      if(!initOk) throw (lastWarmupError || new Error('SDK initialization failed'));
 
       connected = true;
       document.getElementById('liveDot').classList.add('live');
