@@ -1221,7 +1221,7 @@
         });
       }
       const result = orders.length > 1
-        ? await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' })
+        ? await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl', vaultAddress: null })
         : await sdk.exchange.placeOrder(orders[0]);
       log('Order response: ' + JSON.stringify(result).slice(0,140), 'ok');
       loadAccountState();
@@ -1285,7 +1285,11 @@
       });
 
       // Hyperliquid can return HTTP 200 "ok" with a rejected order buried inside — check for that
-      // explicitly instead of treating any 200 response as success.
+      // explicitly instead of treating any 200 response as success. Two shapes: a top-level
+      // {status:'err', response:'<message>'} string, and a nested per-order status list.
+      if(result && result.status === 'err'){
+        throw new Error(typeof result.response === 'string' ? result.response : JSON.stringify(result.response));
+      }
       const apiError = result && result.response && result.response.data && result.response.data.statuses &&
         result.response.data.statuses.find(s => s.error);
       if(apiError) throw new Error(apiError.error);
@@ -2826,44 +2830,74 @@
       // "Unknown asset: undefined" without a definitive answer, the next occurrence needs to
       // show real data instead of another guess.
       log('DIAGNOSTIC — full order payload: ' + JSON.stringify(orders), '');
+
+      // Temporarily intercept fetch to capture the exact body the SDK sends to /exchange. The
+      // payload we hand the SDK is not what goes on the wire — the SDK builds and signs its own
+      // action object, and that's where the unwanted vaultAddress is being attached. This shows
+      // the real request rather than what we assume is being sent.
+      const originalFetch = window.fetch;
+      window.fetch = async function(url, opts){
+        try{
+          if(String(url).includes('/exchange') && opts && opts.body){
+            log('DIAGNOSTIC — actual /exchange request body: ' + String(opts.body).slice(0, 600), '');
+          }
+        }catch(e){ /* never let logging break the request */ }
+        return originalFetch.apply(this, arguments);
+      };
       let result;
       try{
-        result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
-      }catch(sdkError){
-        if(String(sdkError.message || '').includes('Unknown asset')){
-          // The SDK's internal asset-index map is empty — repair it directly, then retry the
-          // original payload unchanged. This is the same repair connect() performs; doing it
-          // again here covers the case where the map got cleared or expired mid-session.
-          log('Asset index lookup failed — repairing the SDK asset map and retrying…', 'err');
-          const repaired = await ensureSdkAssetMaps();
-          if(!repaired){
-            setExecuteStatus('⚠ Could not place the order: the SDK asset map could not be populated. Check the Activity Log for details.', 'bad');
+        try{
+          result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl', vaultAddress: null });
+        }catch(sdkError){
+          if(String(sdkError.message || '').includes('Unknown asset')){
+            // The SDK's internal asset-index map is empty — repair it directly, then retry the
+            // original payload unchanged. This is the same repair connect() performs; doing it
+            // again here covers the case where the map got cleared or expired mid-session.
+            log('Asset index lookup failed — repairing the SDK asset map and retrying…', 'err');
+            const repaired = await ensureSdkAssetMaps();
+            if(!repaired){
+              setExecuteStatus('⚠ Could not place the order: the SDK asset map could not be populated. Check the Activity Log for details.', 'bad');
+              btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
+              return;
+            }
+            try{
+              result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl', vaultAddress: null });
+              log('Retry after asset-map repair succeeded.', 'ok');
+            }catch(retryError){
+              log('DIAGNOSTIC — retry after asset-map repair still failed: ' + retryError.message + (retryError.stack ? ('\n' + retryError.stack) : ''), 'err');
+              setExecuteStatus('⚠ Could not place the order: ' + retryError.message, 'bad');
+              btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
+              return;
+            }
+          } else {
+            log('DIAGNOSTIC — sdk.exchange.placeOrder threw: ' + sdkError.message + (sdkError.stack ? ('\n' + sdkError.stack) : ''), 'err');
+            setExecuteStatus('⚠ SDK error: ' + sdkError.message, 'bad');
             btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
             return;
           }
-          try{
-            result = await sdk.exchange.placeOrder({ orders: orders, grouping: 'normalTpsl' });
-            log('Retry after asset-map repair succeeded.', 'ok');
-          }catch(retryError){
-            log('DIAGNOSTIC — retry after asset-map repair still failed: ' + retryError.message + (retryError.stack ? ('\n' + retryError.stack) : ''), 'err');
-            setExecuteStatus('⚠ Could not place the order: ' + retryError.message, 'bad');
-            btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
-            return;
-          }
-        } else {
-          log('DIAGNOSTIC — sdk.exchange.placeOrder threw: ' + sdkError.message + (sdkError.stack ? ('\n' + sdkError.stack) : ''), 'err');
-          setExecuteStatus('⚠ SDK error: ' + sdkError.message, 'bad');
-          btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
-          return;
         }
+      } finally {
+        window.fetch = originalFetch; // always restore, even on an early return above
       }
       log('Agent trade response: ' + JSON.stringify(result), 'ok');
 
+      // Hyperliquid returns errors in two shapes: a top-level {status:'err', response:'<message>'}
+      // where response is a plain string, and a per-order status list nested under
+      // response.data.statuses. The nested check alone silently treated the top-level form as a
+      // success (e.g. "Vault not registered" reported nothing and the UI showed a placed trade).
+      if(result && result.status === 'err'){
+        const topLevelError = typeof result.response === 'string' ? result.response : JSON.stringify(result.response);
+        log('DIAGNOSTIC — order rejected. Payload sent: ' + JSON.stringify(orders) + ' | Full response: ' + JSON.stringify(result), 'err');
+        setExecuteStatus('⚠ Exchange rejected the order: ' + topLevelError, 'bad');
+        btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
+        return;
+      }
       const apiError = result && result.response && result.response.data && result.response.data.statuses &&
         result.response.data.statuses.find(s => s.error);
       if(apiError){
         log('DIAGNOSTIC — order rejected. Payload sent: ' + JSON.stringify(orders) + ' | Full response: ' + JSON.stringify(result), 'err');
         setExecuteStatus('⚠ Exchange rejected the order: ' + apiError.error, 'bad');
+        btn.disabled = false; btn.textContent = 'Confirm & Place Trade';
         return;
       }
 
@@ -3171,7 +3205,11 @@
         enableWs: false,
         privateKey: cfg.agentKey,
         testnet: cfg.network !== 'mainnet',
-        walletAddress: cfg.address
+        walletAddress: cfg.address,
+        // Explicitly null: the SDK otherwise falls back to using the wallet address derived from
+        // the private key as a vault address, which Hyperliquid rejects with
+        // "Vault not registered" since an agent wallet is not a vault.
+        vaultAddress: null
       });
 
       // The SDK requires explicit initialization before its internal asset-index resolution
@@ -3198,6 +3236,19 @@
       }
       log('SDK init: connect=' + (typeof sdk.connect) + ', refreshAssetMapsNow=' + (typeof sdk.refreshAssetMapsNow) + ', initialized=' + initOk, initOk ? 'ok' : 'err');
       await ensureSdkAssetMaps();
+
+      // "Vault not registered" means a vaultAddress is being attached to the signed action.
+      // Passing vaultAddress:null as a constructor option and per-call parameter didn't stop
+      // it, so clear the instance properties directly — the same approach that worked for the
+      // asset map. The SDK exposes vaultAddress as an own property on both the instance and
+      // (on some builds) the exchange object.
+      try{
+        const before = { sdk: sdk.vaultAddress, exch: sdk.exchange && sdk.exchange.vaultAddress };
+        sdk.vaultAddress = null;
+        if(sdk.exchange && 'vaultAddress' in sdk.exchange) sdk.exchange.vaultAddress = null;
+        if(sdk.exchange && sdk.exchange.parent && 'vaultAddress' in sdk.exchange.parent) sdk.exchange.parent.vaultAddress = null;
+        log('Vault address cleared (was sdk=' + JSON.stringify(before.sdk) + ', exchange=' + JSON.stringify(before.exch) + ').', 'ok');
+      }catch(e){ log('Could not clear vaultAddress: ' + e.message, 'err'); }
       if(!initOk) throw (lastWarmupError || new Error('SDK initialization failed'));
 
       connected = true;
