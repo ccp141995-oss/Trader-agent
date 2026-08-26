@@ -3237,18 +3237,31 @@
       log('SDK init: connect=' + (typeof sdk.connect) + ', refreshAssetMapsNow=' + (typeof sdk.refreshAssetMapsNow) + ', initialized=' + initOk, initOk ? 'ok' : 'err');
       await ensureSdkAssetMaps();
 
-      // "Vault not registered" means a vaultAddress is being attached to the signed action.
-      // Passing vaultAddress:null as a constructor option and per-call parameter didn't stop
-      // it, so clear the instance properties directly — the same approach that worked for the
-      // asset map. The SDK exposes vaultAddress as an own property on both the instance and
-      // (on some builds) the exchange object.
+      // "Vault not registered" persisted even after clearing sdk.vaultAddress and
+      // sdk.exchange.vaultAddress directly, and a fetch-interceptor found nothing — meaning the
+      // SDK likely captured its own reference to fetch before we could intercept it, and the
+      // actual vault-related state lives somewhere we haven't found by guessing. This searches
+      // every own property, two levels deep, for anything named like "vault" and reports both
+      // where it lives and its value, then clears every match found.
       try{
-        const before = { sdk: sdk.vaultAddress, exch: sdk.exchange && sdk.exchange.vaultAddress };
-        sdk.vaultAddress = null;
-        if(sdk.exchange && 'vaultAddress' in sdk.exchange) sdk.exchange.vaultAddress = null;
-        if(sdk.exchange && sdk.exchange.parent && 'vaultAddress' in sdk.exchange.parent) sdk.exchange.parent.vaultAddress = null;
-        log('Vault address cleared (was sdk=' + JSON.stringify(before.sdk) + ', exchange=' + JSON.stringify(before.exch) + ').', 'ok');
-      }catch(e){ log('Could not clear vaultAddress: ' + e.message, 'err'); }
+        const hits = [];
+        function scan(obj, path, depth){
+          if(!obj || typeof obj !== 'object' || depth > 2) return;
+          Object.keys(obj).forEach(key => {
+            if(/vault/i.test(key)){
+              hits.push(path + '.' + key + ' = ' + JSON.stringify(obj[key]));
+              try{ obj[key] = null; }catch(e){}
+            }
+          });
+          if(depth < 2){
+            ['exchange','info','custom','symbolConversion'].forEach(sub => {
+              if(obj[sub] && typeof obj[sub] === 'object') scan(obj[sub], path + '.' + sub, depth + 1);
+            });
+          }
+        }
+        scan(sdk, 'sdk', 0);
+        log(hits.length ? ('Found and cleared vault-related propert' + (hits.length===1?'y':'ies') + ': ' + hits.join(' | ')) : 'No vault-related properties found anywhere on the SDK (2 levels deep) — the value may be computed fresh at signing time rather than stored.', hits.length ? 'ok' : 'err');
+      }catch(e){ log('Vault property scan failed: ' + e.message, 'err'); }
       if(!initOk) throw (lastWarmupError || new Error('SDK initialization failed'));
 
       connected = true;
