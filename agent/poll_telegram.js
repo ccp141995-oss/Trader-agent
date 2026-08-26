@@ -160,28 +160,24 @@ async function buildExecutionSdk(){
     testnet: HL_EXEC_NETWORK !== 'mainnet',
     walletAddress: HL_ACCOUNT_ADDRESS
   });
-  // sdk.info.perpetuals.getMeta() (the previous attempt) is a plain data-fetching method,
-  // unrelated to the SDK's internal "SymbolConversion" cache that getAssetIndex() actually
-  // reads from. refreshAssetMapsNow() is the SDK's own documented method for forcing that
-  // cache to populate synchronously, rather than waiting on its automatic 60s background timer.
-  // Falls back to the old call defensively, in case the exact method differs by SDK version.
+  // The SDK requires explicit initialization before its internal asset-index resolution works —
+  // confirmed from its own docs: "In most cases the SDK will automatically initialize itself
+  // when required. However, in some cases you may need to explicitly initialize the SDK:
+  // await sdk.connect()". Works with enableWs:false too — it initializes the SDK, not just
+  // websockets. Only after that does refreshing the symbol-conversion cache make sense.
   let warmupOk = false, lastWarmupError = null;
   for(let attempt = 1; attempt <= 3 && !warmupOk; attempt++){
     try{
-      if(typeof sdk.refreshAssetMapsNow === 'function'){
-        await sdk.refreshAssetMapsNow();
-      } else if(sdk.info && sdk.info.perpetuals && typeof sdk.info.perpetuals.getMeta === 'function'){
-        await sdk.info.perpetuals.getMeta();
-      } else {
-        throw new Error('Neither refreshAssetMapsNow() nor info.perpetuals.getMeta() exist on this SDK build.');
-      }
+      if(typeof sdk.connect === 'function') await sdk.connect();
+      if(typeof sdk.refreshAssetMapsNow === 'function') await sdk.refreshAssetMapsNow();
+      else if(sdk.info && sdk.info.perpetuals && typeof sdk.info.perpetuals.getMeta === 'function') await sdk.info.perpetuals.getMeta();
       warmupOk = true;
     }catch(e){
       lastWarmupError = e;
       if(attempt < 3) await new Promise(r => setTimeout(r, attempt * 800));
     }
   }
-  if(!warmupOk) throw lastWarmupError;
+  if(!warmupOk) throw (lastWarmupError || new Error('SDK initialization failed'));
   return sdk;
 }
 
@@ -495,6 +491,7 @@ async function executeTrade(rec){
     // of failure — regardless of whether the exact refresh method needed matches what
     // buildExecutionSdk() already tried, this retries in the most direct context possible.
     if(String(sdkError.message || '').includes('Unknown asset')){
+      if(typeof sdk.connect === 'function') await sdk.connect();
       if(typeof sdk.refreshAssetMapsNow === 'function') await sdk.refreshAssetMapsNow();
       else if(sdk.info && sdk.info.perpetuals) await sdk.info.perpetuals.getMeta();
       result = await sdk.exchange.placeOrder({ orders, grouping: 'normalTpsl' });
