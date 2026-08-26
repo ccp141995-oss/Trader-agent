@@ -121,6 +121,16 @@ function formatHlPrice(price, szDecimals){
   return rounded;
 }
 
+// Hyperliquid enforces a maximum number of decimal places for SIZE too, per asset — simply
+// szDecimals itself, unlike price which has the extra 5-significant-figure rule. A raw
+// notional/price division can easily exceed that, causing "Order has invalid size" — the exact
+// same class of bug formatHlPrice already fixed for prices, just never applied to size.
+function formatHlSize(size, szDecimals){
+  if(szDecimals == null) return parseFloat(size.toFixed(4)); // conservative fallback
+  const factor = Math.pow(10, szDecimals);
+  return Math.round(size * factor) / factor;
+}
+
 function findRec(feed, id){ return (feed.recommendations || []).find(r => r.id === id); }
 
 async function editStatusMessage(rec, text){
@@ -485,19 +495,20 @@ async function executeTrade(rec){
   const slippage = 0.03;
   const entryPx = formatHlPrice(isBuy ? currentMid * (1 + slippage) : currentMid * (1 - slippage), szDecimals);
   const stopPx = formatHlPrice(rec.stop_loss_price, szDecimals);
+  const roundedSize = formatHlSize(size, szDecimals);
 
   const orders = [{
-    coin: rec.coin + '-PERP', is_buy: isBuy, sz: parseFloat(size.toFixed(5)),
+    coin: rec.coin + '-PERP', is_buy: isBuy, sz: roundedSize,
     limit_px: entryPx, order_type: { limit: { tif: 'Ioc' } }, reduce_only: false
   }, {
-    coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
+    coin: rec.coin + '-PERP', is_buy: !isBuy, sz: roundedSize,
     limit_px: stopPx,
     order_type: { trigger: { isMarket: true, triggerPx: String(stopPx), tpsl: 'sl' } }, reduce_only: true
   }];
   if(rec.take_profit_price){
     const tpPx = formatHlPrice(rec.take_profit_price, szDecimals);
     orders.push({
-      coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
+      coin: rec.coin + '-PERP', is_buy: !isBuy, sz: roundedSize,
       limit_px: tpPx,
       order_type: { trigger: { isMarket: true, triggerPx: String(tpPx), tpsl: 'tp' } }, reduce_only: true
     });
@@ -505,7 +516,7 @@ async function executeTrade(rec){
     const mult = 1 + (DEFAULT_TAKE_PROFIT_PCT/100) * (isBuy ? 1 : -1);
     const tpPx = formatHlPrice(currentMid * mult, szDecimals);
     orders.push({
-      coin: rec.coin + '-PERP', is_buy: !isBuy, sz: parseFloat(size.toFixed(5)),
+      coin: rec.coin + '-PERP', is_buy: !isBuy, sz: roundedSize,
       limit_px: tpPx,
       order_type: { trigger: { isMarket: true, triggerPx: String(tpPx), tpsl: 'tp' } }, reduce_only: true
     });
