@@ -47,7 +47,13 @@ let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
 let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
 const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
 let MAX_RECS_PER_SCAN = parseFloat(process.env.MAX_RECS_PER_SCAN || '1'); // keep only the top-N by confidence, even if more candidates qualify
-const AUTO_TRADE_MIN_SCORE = 7; // out of 8 — only the #1-ranked rec, and only above this score, auto-executes
+const AUTO_TRADE_MIN_SCORE = 6; // out of 8 — only the #1-ranked rec, and only at/above this score, auto-executes
+// Lower-confidence auto-trades risk less capital, scaled by score. This scales position SIZE
+// specifically, not leverage — the dollar amount actually at risk if a stop is hit is driven by
+// notional size, not leverage (leverage only changes how much margin is tied up for the same
+// notional, not the loss at the stop price), so size is the correct thing to scale down for a
+// less-confident idea.
+const AUTO_TRADE_SIZE_SCALE_BY_SCORE = { 6: 0.5, 7: 0.75, 8: 1.0 };
 let MAX_POSITION_PCT = parseFloat(process.env.MAX_POSITION_PCT || '5');
 let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
 let DEFAULT_TAKE_PROFIT_PCT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
@@ -1457,6 +1463,14 @@ async function main(){
     rec.auto_trade = AUTO_TRADE_ENABLED && isTopPick && score >= AUTO_TRADE_MIN_SCORE;
     if(AUTO_TRADE_ENABLED && isTopPick && !rec.auto_trade){
       rec.risk_flags = (rec.risk_flags || []).concat([`auto-trade skipped — score ${score}/8 doesn't clear the ${AUTO_TRADE_MIN_SCORE}/8 bar, needs your manual confirm`]);
+    }
+    if(rec.auto_trade){
+      const scale = AUTO_TRADE_SIZE_SCALE_BY_SCORE[score] != null ? AUTO_TRADE_SIZE_SCALE_BY_SCORE[score] : 1.0;
+      if(scale < 1.0 && rec.suggested_size_pct_equity){
+        const originalPct = rec.suggested_size_pct_equity;
+        rec.suggested_size_pct_equity = parseFloat((originalPct * scale).toFixed(2));
+        rec.risk_flags = (rec.risk_flags || []).concat([`auto-trade size reduced to ${(scale*100).toFixed(0)}% (${score}/8 score, below max confidence) — ${originalPct}% → ${rec.suggested_size_pct_equity}% of equity`]);
+      }
     }
   });
   for(const rec of newRecs){
