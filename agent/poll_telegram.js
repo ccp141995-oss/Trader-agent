@@ -182,14 +182,28 @@ async function buildExecutionSdk(){
     }
   }
   if(!warmupOk) throw (lastWarmupError || new Error('SDK initialization failed'));
-  // "Vault not registered" means a vaultAddress is being attached to the signed action. Passing
-  // vaultAddress:null as a constructor option and per-call parameter isn't always enough, so
-  // clear the instance properties directly as well.
+  // "Vault not registered" persisted after clearing sdk.vaultAddress and sdk.exchange.vaultAddress
+  // directly — the actual state may live somewhere else, or be computed fresh at signing time.
+  // Search every own property, two levels deep, for anything named like "vault" and clear it.
   try{
-    sdk.vaultAddress = null;
-    if(sdk.exchange && 'vaultAddress' in sdk.exchange) sdk.exchange.vaultAddress = null;
-    if(sdk.exchange && sdk.exchange.parent && 'vaultAddress' in sdk.exchange.parent) sdk.exchange.parent.vaultAddress = null;
-  }catch(e){ console.error('Could not clear vaultAddress:', e.message); }
+    const hits = [];
+    function scan(obj, path, depth){
+      if(!obj || typeof obj !== 'object' || depth > 2) return;
+      Object.keys(obj).forEach(key => {
+        if(/vault/i.test(key)){
+          hits.push(path + '.' + key + ' = ' + JSON.stringify(obj[key]));
+          try{ obj[key] = null; }catch(e){}
+        }
+      });
+      if(depth < 2){
+        ['exchange','info','custom','symbolConversion'].forEach(sub => {
+          if(obj[sub] && typeof obj[sub] === 'object') scan(obj[sub], path + '.' + sub, depth + 1);
+        });
+      }
+    }
+    scan(sdk, 'sdk', 0);
+    console.log(hits.length ? ('Found and cleared vault-related properties: ' + hits.join(' | ')) : 'No vault-related properties found on the SDK (2 levels deep) — value may be computed fresh at signing time.');
+  }catch(e){ console.error('Vault property scan failed:', e.message); }
   return sdk;
 }
 
