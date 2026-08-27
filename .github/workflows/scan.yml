@@ -1,1 +1,89 @@
+name: Trade Agent Scan
 
+on:
+  schedule:
+    # Every 15 minutes. This is the "cheap check" cadence -- the script's own
+    # AUTO_SCAN_INTERVAL_MIN cooldown decides when a full (paid) research call fires.
+    # Offset from :00/:15/:30/:45 specifically -- GitHub's own docs warn that scheduled workflows
+    # can be delayed or dropped during high-load periods, explicitly calling out "the start of
+    # every hour" and recommending against the first ten minutes past the hour. :07/:22/:37/:52
+    # avoids that congestion window entirely while keeping the same 15-minute cadence.
+    - cron: '7-59/15 * * * *'
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+
+permissions:
+  contents: write   # needed so the workflow can commit updated state/recommendations
+
+concurrency:
+  group: jarvis-trade-agent-git
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run scanner
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HL_ACCOUNT_ADDRESS: ${{ secrets.HL_ACCOUNT_ADDRESS }}
+          WATCHLIST: ${{ vars.WATCHLIST }}
+          SCAN_MODE: ${{ vars.SCAN_MODE }}
+          FILTERED_TOP_N: ${{ vars.FILTERED_TOP_N }}
+          FILTERED_MIN_OI: ${{ vars.FILTERED_MIN_OI }}
+          FILTERED_MIN_VOLUME_24H: ${{ vars.FILTERED_MIN_VOLUME_24H }}
+          HL_NETWORK: ${{ vars.HL_NETWORK }}
+          HL_EXEC_NETWORK: ${{ vars.HL_EXEC_NETWORK }}
+          AUTO_SCAN_INTERVAL_MIN: ${{ vars.AUTO_SCAN_INTERVAL_MIN }}
+          SIGNAL_SENSITIVITY: ${{ vars.SIGNAL_SENSITIVITY }}
+          EXECUTION_WINDOW_MIN: ${{ vars.EXECUTION_WINDOW_MIN }}
+          MAX_STOP_LOSS_PCT: ${{ vars.MAX_STOP_LOSS_PCT }}
+          AI_RESEARCH_ENABLED: ${{ vars.AI_RESEARCH_ENABLED }}
+          AUTO_TRADE_ENABLED: ${{ vars.AUTO_TRADE_ENABLED }}
+          MAX_RECS_PER_SCAN: ${{ vars.MAX_RECS_PER_SCAN }}
+          MAX_TAKE_PROFIT_PCT: ${{ vars.MAX_TAKE_PROFIT_PCT }}
+          MAX_ENTRY_DEVIATION_PCT: ${{ vars.MAX_ENTRY_DEVIATION_PCT }}
+        run: node agent/scan.js
+
+      - name: Commit updated state and recommendations
+        run: |
+          git config user.name "jarvis-trade-agent"
+          git config user.email "actions@github.com"
+          git add agent/state.json docs/recommendations.json docs/charts/ docs/circuit_breaker.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Trade agent scan update"
+          for i in 1 2 3 4 5; do
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase && git push; then
+              echo "Pushed on attempt $i."
+              exit 0
+            fi
+            echo "Push attempt $i failed (likely racing with the Telegram poller workflow) -- retrying..."
+            sleep $(( (RANDOM % 5) + 3 ))
+          done
+          git rebase --abort 2>/dev/null || true
+          echo "Could not push after 5 attempts. The recommendation was already sent to Telegram if applicable; only the repo commit is delayed to the next run."
+          exit 1
+
+      - name: Notify on workflow failure
+        if: failure()
+        run: |
+          cat > /tmp/failure_payload.json <<'PAYLOAD_EOF'
+          {"chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}", "text": "Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs -- nothing was silently lost, but this run did not complete."}
+          PAYLOAD_EOF
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/failure_payload.json \
+            || echo "Could not send failure notification (bad token/chat id, or Telegram unreachable)."
