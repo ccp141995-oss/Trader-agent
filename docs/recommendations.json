@@ -81,7 +81,7 @@
       "generated_at": "2026-08-27T12:50:30.521Z",
       "expires_at": "2026-08-27T13:20:30.521Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1164,7 +1164,7 @@
       "generated_at": "2026-08-27T04:19:26.695Z",
       "expires_at": "2026-08-27T04:49:26.696Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
@@ -2248,7 +2248,7 @@
       "generated_at": "2026-08-26T18:36:21.911Z",
       "expires_at": "2026-08-26T19:06:21.911Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
