@@ -4,7 +4,11 @@ on:
   schedule:
     # Every 15 minutes. This is the "cheap check" cadence — the script's own
     # AUTO_SCAN_INTERVAL_MIN cooldown decides when a full (paid) research call fires.
-    - cron: '*/15 * * * *'
+    # Offset from :00/:15/:30/:45 specifically — GitHub's own docs warn that scheduled workflows
+    # can be delayed or dropped during high-load periods, explicitly calling out "the start of
+    # every hour" and recommending against the first ten minutes past the hour. :07/:22/:37/:52
+    # avoids that congestion window entirely while keeping the same 15-minute cadence.
+    - cron: '7-59/15 * * * *'
   workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
 
 permissions:

@@ -5,7 +5,9 @@ on:
     # Every 5 minutes — GitHub's practical minimum for reliable scheduling.
     # Each run itself long-polls Telegram for ~4 minutes, so real response time
     # is usually well under a minute while this workflow is "between" runs.
-    - cron: '*/5 * * * *'
+    # Same reasoning as scan.yml's offset — avoid :00 specifically, GitHub's documented worst
+    # time for scheduled-workflow reliability.
+    - cron: '2-59/5 * * * *'
   workflow_dispatch: {}
 
 permissions:
