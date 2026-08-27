@@ -13,6 +13,6 @@
   "circuitBreakerDrawdownPct": 25,
   "maxRecsPerScan": 1,
   "aiResearchEnabled": true,
-  "autoTradeEnabled": true,
-  "updated_at": "2026-08-27T04:20:24.807Z"
+  "autoTradeEnabled": false,
+  "updated_at": "2026-08-27T04:36:16.039Z"
 }
