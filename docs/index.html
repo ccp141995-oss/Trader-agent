@@ -2129,7 +2129,8 @@
       + "trade could fail (counterthesis), and briefly say why you're proposing it anyway despite that risk (counterthesis_response). If you can't come up with "
       + "a credible reason it could fail, or can't credibly answer your own counterthesis, drop the idea rather than force it. "
       + "Be concise: rationale <= 35 words, counterthesis <= 25 words, counterthesis_response <= 25 words. "
-      + "Respond with ONLY raw JSON (no markdown fences, no prose) matching exactly: "
+      + "CRITICAL: Respond with ONLY raw JSON — no markdown fences, no prose before or after, no explanation of your approach. Your entire response must be "
+      + "parseable as JSON starting from the very first character. Match exactly: "
       + '{"recommendations":[{"coin":string,"direction":"long"|"short",'
       + '"pattern":string,"indicators_confirming":[string],"confluence_factors":[string],'
       + '"rationale":string,"counterthesis":string,"counterthesis_response":string,"time_horizon":string,'
@@ -2223,7 +2224,21 @@
     if(data.error){ throw new Error(data.error.message || 'Anthropic API error'); }
     const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
     let raw = textBlocks.join('\n').trim().replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim();
-    return JSON.parse(raw);
+
+    // Stripping code fences handles the model wrapping its whole answer in ```json — it doesn't
+    // handle a plain-text preamble before the JSON (e.g. "I'll work through this..."), which is
+    // a different failure mode. Extracting from the first { to the last } handles both cases.
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if(firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace){
+      throw new Error('No JSON object found in Anthropic response. Raw text started with: ' + raw.slice(0, 150));
+    }
+    const jsonSlice = raw.slice(firstBrace, lastBrace + 1);
+    try{
+      return JSON.parse(jsonSlice);
+    }catch(e){
+      throw new Error('Could not parse JSON from Anthropic response (' + e.message + '). Extracted slice started with: ' + jsonSlice.slice(0, 150));
+    }
   }
 
   async function runAgentScan(coinsOverride){
