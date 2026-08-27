@@ -2,9 +2,9 @@ name: Trade Agent Scan
 
 on:
   schedule:
-    # Every 15 minutes. This is the "cheap check" cadence — the script's own
+    # Every 15 minutes. This is the "cheap check" cadence -- the script's own
     # AUTO_SCAN_INTERVAL_MIN cooldown decides when a full (paid) research call fires.
-    # Offset from :00/:15/:30/:45 specifically — GitHub's own docs warn that scheduled workflows
+    # Offset from :00/:15/:30/:45 specifically -- GitHub's own docs warn that scheduled workflows
     # can be delayed or dropped during high-load periods, explicitly calling out "the start of
     # every hour" and recommending against the first ten minutes past the hour. :07/:22/:37/:52
     # avoids that congestion window entirely while keeping the same 15-minute cadence.
@@ -70,7 +70,7 @@ jobs:
               echo "Pushed on attempt $i."
               exit 0
             fi
-            echo "Push attempt $i failed (likely racing with the Telegram poller workflow) — retrying..."
+            echo "Push attempt $i failed (likely racing with the Telegram poller workflow) -- retrying..."
             sleep $(( (RANDOM % 5) + 3 ))
           done
           git rebase --abort 2>/dev/null || true
@@ -80,7 +80,10 @@ jobs:
       - name: Notify on workflow failure
         if: failure()
         run: |
+          cat > /tmp/failure_payload.json <<'PAYLOAD_EOF'
+          {"chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}", "text": "Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs -- nothing was silently lost, but this run did not complete."}
+          PAYLOAD_EOF
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\": \"${{ secrets.TELEGRAM_CHAT_ID }}\", \"text\": \"⚠ Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs — nothing was silently lost, but this run did not complete.\"}" \
+            --data @/tmp/failure_payload.json \
             || echo "Could not send failure notification (bad token/chat id, or Telegram unreachable)."
