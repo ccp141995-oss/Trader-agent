@@ -21,6 +21,10 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # Safety net: none of our HTTP calls (Hyperliquid, Anthropic) have explicit timeouts, so a
+    # single hung network call could otherwise leave this job running for GitHub's default of up
+    # to 6 hours before being forcibly killed. This forces a clean failure well before that.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,9 +85,9 @@ jobs:
         if: failure()
         run: |
           cat > /tmp/failure_payload.json <<'PAYLOAD_EOF'
-          {"chat_id":"${{ secrets.TELEGRAM_CHAT_ID }}","text":"⚠ Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs."}
+          {"chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}", "text": "Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs -- nothing was silently lost, but this run did not complete."}
           PAYLOAD_EOF
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -H "Content-Type: application/json" \
             --data @/tmp/failure_payload.json \
             || echo "Could not send failure notification (bad token/chat id, or Telegram unreachable)."

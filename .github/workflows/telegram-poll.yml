@@ -20,6 +20,11 @@ concurrency:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    # Safety net: the poll loop itself is time-bounded (~2.5 min), but nothing after it (asset
+    # map population, order placement, Hyperliquid/Telegram calls) has an explicit timeout, so a
+    # single hung network call could leave this job running for up to GitHub's default 6 hours.
+    # 10 minutes gives generous room for the poll window plus retries, without an indefinite hang.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
