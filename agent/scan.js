@@ -1519,7 +1519,11 @@ async function main(){
       }
     }
 
-    const replyMarkup = AUTO_TRADE_ENABLED
+    // Uses rec.auto_trade specifically, not the global AUTO_TRADE_ENABLED toggle — a rec can
+    // exist even when auto-trade is globally on but this particular one didn't qualify (not the
+    // top pick, or below the score floor), and it must still show Confirm/Deny in that case,
+    // not a Cancel-only button implying it'll execute unattended when it actually won't.
+    const replyMarkup = rec.auto_trade
       ? { inline_keyboard: [[ { text: '❌ Cancel', callback_data: 'deny:' + rec.id } ]] }
       : { inline_keyboard: [[
           { text: '✅ Confirm', callback_data: 'confirm:' + rec.id },
@@ -1550,4 +1554,4 @@ async function main(){
   console.log('Done.');
 }
 
-main().catch(e => { console.error('Scan failed:', e); process.exit(1); });
+main().then(() => process.exit(0)).catch(e => { console.error('Scan failed:', e); process.exit(1); });

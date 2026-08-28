@@ -726,7 +726,14 @@ async function main(){
   console.log('Poll cycle complete.');
 }
 
-main().catch(async e => {
+main().then(() => {
+  // Explicit exit, matching the failure path below — without this, a lingering timer left
+  // running internally by the SDK (its own docs mention an automatic 60-second background
+  // refresh of its symbol-conversion cache) can keep Node's event loop alive indefinitely even
+  // after all of our own work is genuinely done, leaving the job running until GitHub's job
+  // timeout eventually kills it.
+  process.exit(0);
+}).catch(async e => {
   console.error('Poller failed:', e);
   if(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID){
     try{
