@@ -81,9 +81,9 @@ jobs:
         if: failure()
         run: |
           cat > /tmp/failure_payload.json <<'PAYLOAD_EOF'
-          {"chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}", "text": "Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs -- nothing was silently lost, but this run did not complete."}
+          {"chat_id":"${{ secrets.TELEGRAM_CHAT_ID }}","text":"⚠ Trade Agent Scan workflow failed on GitHub Actions (run ${{ github.run_id }}). Check the Actions tab for logs."}
           PAYLOAD_EOF
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -H "Content-Type: application/json" \
             --data @/tmp/failure_payload.json \
             || echo "Could not send failure notification (bad token/chat id, or Telegram unreachable)."
