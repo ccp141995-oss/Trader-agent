@@ -66,7 +66,7 @@
       "generated_at": "2026-08-28T22:26:53.425Z",
       "expires_at": "2026-08-28T22:56:53.425Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
@@ -1081,7 +1081,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/v4cr6buhde.png",
       "telegram_message_id": 153,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-08-28T22:37:05.609Z"
     },
     {
       "coin": "BTC",
