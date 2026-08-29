@@ -2,17 +2,18 @@ name: Trade Agent Scan
 
 on:
   schedule:
-    # Every 15 minutes. This is the "cheap check" cadence -- the script's own
-    # AUTO_SCAN_INTERVAL_MIN cooldown decides when a full (paid) research call fires.
-    # Offset from :00/:15/:30/:45 specifically -- GitHub's own docs warn that scheduled workflows
-    # can be delayed or dropped during high-load periods, explicitly calling out "the start of
-    # every hour" and recommending against the first ten minutes past the hour. :07/:22/:37/:52
-    # avoids that congestion window entirely while keeping the same 15-minute cadence.
+    # Kept as a redundant backup only — GitHub's own schedule trigger has proven unreliable for
+    # this repo (confirmed: stopped firing entirely for an extended period with no error, no
+    # disabled banner, and no explanation found on the repo side). repository_dispatch below,
+    # driven by an external cron service, is now the primary trigger.
     - cron: '7-59/15 * * * *'
   workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+  repository_dispatch:
+    types: [trigger-scan]   # fired by an external cron service hitting the GitHub API directly
 
 permissions:
   contents: write   # needed so the workflow can commit updated state/recommendations
+  actions: write    # needed to immediately dispatch the poller workflow when auto-trade is eligible
 
 concurrency:
   group: jarvis-trade-agent-git
@@ -80,6 +81,27 @@ jobs:
           git rebase --abort 2>/dev/null || true
           echo "Could not push after 5 attempts. The recommendation was already sent to Telegram if applicable; only the repo commit is delayed to the next run."
           exit 1
+
+      - name: Immediately trigger the poller if auto-trade is eligible
+        # Only runs after the push above completes, so the poller run this triggers is guaranteed
+        # to see the freshly-committed recommendation rather than a stale checkout. This is what
+        # actually makes auto-trade fast -- without it, the earliest execution could happen is
+        # whenever the poller's own next scheduled run occurs (up to 5 min) plus however far into
+        # its ~2.5-minute confirm/deny window that run already is. This cuts that down to roughly
+        # however long a fresh GitHub Actions runner takes to start, typically well under a minute.
+        run: |
+          if [ -f auto_trade_pending.flag ]; then
+            echo "Auto-trade-eligible recommendation found -- dispatching the poller workflow now."
+            curl -s -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/telegram-poll.yml/dispatches" \
+              -d '{"ref":"${{ github.ref_name }}"}' \
+              || echo "Could not dispatch the poller workflow immediately -- it will still run on its own schedule within a few minutes."
+          else
+            echo "No auto-trade-eligible recommendation this run -- nothing to dispatch immediately."
+          fi
 
       - name: Notify on workflow failure
         if: failure()
