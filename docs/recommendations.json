@@ -86,7 +86,7 @@
       "generated_at": "2026-08-29T14:29:31.407Z",
       "expires_at": "2026-08-29T14:59:31.407Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1101,7 +1101,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/a3of6h8fpr.png",
       "telegram_message_id": 281,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 83.00% since the recommendation (>2% max entry deviation) — skipped for safety"
     },
     {
       "coin": "AAVE",
