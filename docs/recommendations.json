@@ -88,7 +88,7 @@
       "generated_at": "2026-08-29T13:57:30.123Z",
       "expires_at": "2026-08-29T14:27:30.123Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1103,7 +1103,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/bm2qq2398r.png",
       "telegram_message_id": 277,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 82.94% since the recommendation (>2% max entry deviation) — skipped for safety"
     },
     {
       "coin": "BNB",
@@ -2244,7 +2245,7 @@
       "generated_at": "2026-08-29T13:26:23.226Z",
       "expires_at": "2026-08-29T13:56:23.226Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
