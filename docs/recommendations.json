@@ -91,7 +91,7 @@
       "generated_at": "2026-08-29T02:12:26.057Z",
       "expires_at": "2026-08-29T02:42:26.057Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1106,7 +1106,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/p39ji1wj7t.png",
       "telegram_message_id": 183,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 3.64% since the recommendation (>2% max entry deviation) — skipped for safety"
     },
     {
       "coin": "LINK",
@@ -2266,7 +2267,7 @@
       "generated_at": "2026-08-29T01:41:19.366Z",
       "expires_at": "2026-08-29T02:11:19.366Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
