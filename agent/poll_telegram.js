@@ -691,6 +691,15 @@ async function main(){
 
   await sweepExpired(feed);
 
+  // Auto-trade sweep now runs immediately, before the confirm/deny polling loop below --
+  // deliberately removing what used to be a ~2.5-minute Cancel window, per explicit
+  // confirmation that speed matters more here than a chance to stop it. The polling loop
+  // afterward still exists and is still needed: it's how a *manually*-confirmable
+  // recommendation (anything that didn't qualify for auto-trade) gets its Confirm/Deny tap
+  // processed -- this reordering only removes the wait specifically for auto-trade.
+  await autoTradeSweep(feed);
+  writeJson(FEED_PATH, feed);
+
   const start = Date.now();
   while(Date.now() - start < POLL_BUDGET_MS){
     const remaining = POLL_BUDGET_MS - (Date.now() - start);
@@ -716,11 +725,6 @@ async function main(){
   }
 
   writeJson(OFFSET_PATH, offsetState);
-  writeJson(FEED_PATH, feed);
-
-  // Auto-trade sweep runs last, after the polling loop above has had its full window to catch
-  // any Cancel taps — anything still pending and marked auto_trade at this point gets executed.
-  await autoTradeSweep(feed);
   writeJson(FEED_PATH, feed);
 
   console.log('Poll cycle complete.');

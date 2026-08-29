@@ -1215,7 +1215,7 @@ function formatTelegramMessage(rec){
 
   lines.push('');
   if(rec.auto_trade){
-    lines.push(`⚡ Auto-trade is ON — this executes automatically in a few minutes unless you tap Cancel below.`);
+    lines.push(`⚡ Auto-trade is ON — this executes immediately, right now. There is no cancel window.`);
   } else {
     lines.push(`Expires in ${EXECUTION_WINDOW_MIN} min — tap below to confirm or deny.`);
   }
@@ -1521,10 +1521,13 @@ async function main(){
 
     // Uses rec.auto_trade specifically, not the global AUTO_TRADE_ENABLED toggle — a rec can
     // exist even when auto-trade is globally on but this particular one didn't qualify (not the
-    // top pick, or below the score floor), and it must still show Confirm/Deny in that case,
-    // not a Cancel-only button implying it'll execute unattended when it actually won't.
+    // top pick, or below the score floor), and it must still show Confirm/Deny in that case.
+    // Auto-trade recs get no buttons at all: execution is now reordered to happen before the
+    // confirm/deny polling loop even starts, so a Cancel button here could never meaningfully
+    // work regardless of how fast someone taps it — showing one anyway would be a false
+    // affordance, not a real option.
     const replyMarkup = rec.auto_trade
-      ? { inline_keyboard: [[ { text: '❌ Cancel', callback_data: 'deny:' + rec.id } ]] }
+      ? undefined
       : { inline_keyboard: [[
           { text: '✅ Confirm', callback_data: 'confirm:' + rec.id },
           { text: '❌ Deny', callback_data: 'deny:' + rec.id }
@@ -1550,6 +1553,19 @@ async function main(){
       try{ fs.unlinkSync(path.join(__dirname, '..', 'docs', rec.chart_image_path)); }catch(e){ /* already gone or never wrote */ }
     }
   });
+
+  // Signal to the workflow whether an auto-trade-eligible rec was generated this run. Without
+  // this, the earliest an auto-trade could execute is whenever the poller's own next scheduled
+  // run happens (up to 5 minutes) plus however far into its confirm/deny polling window that run
+  // already is (up to ~2.5 more minutes) -- several minutes of pure waiting for something that's
+  // supposed to be as fast as possible. This file (not committed to git -- deliberately outside
+  // the git add list below) lets the workflow immediately dispatch the poller instead.
+  if(newRecs.some(rec => rec.auto_trade)){
+    try{
+      fs.writeFileSync(path.join(__dirname, '..', 'auto_trade_pending.flag'), 'true');
+      console.log('Auto-trade-eligible recommendation generated -- signaling the workflow to immediately trigger the poller.');
+    }catch(e){ console.error('Could not write auto-trade flag file:', e.message); }
+  }
 
   console.log('Done.');
 }
