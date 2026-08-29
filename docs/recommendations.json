@@ -97,7 +97,7 @@
       "generated_at": "2026-08-28T23:56:52.991Z",
       "expires_at": "2026-08-29T00:26:52.991Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1112,7 +1112,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/iut6px27pb.png",
       "telegram_message_id": 165,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 7.72% since the recommendation (>2% max entry deviation) — skipped for safety"
     },
     {
       "coin": "WLD",
@@ -2265,7 +2266,7 @@
       "generated_at": "2026-08-28T23:26:46.531Z",
       "expires_at": "2026-08-28T23:56:46.531Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
