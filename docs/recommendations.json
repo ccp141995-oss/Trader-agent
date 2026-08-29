@@ -93,7 +93,7 @@
       "generated_at": "2026-08-29T08:12:20.506Z",
       "expires_at": "2026-08-29T08:42:20.506Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1108,7 +1108,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/rbqpt3rdlm.png",
       "telegram_message_id": 231,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-08-29T08:12:45.632Z"
     },
     {
       "coin": "SUI",
@@ -2255,7 +2256,7 @@
       "generated_at": "2026-08-29T07:41:30.449Z",
       "expires_at": "2026-08-29T08:11:30.449Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
