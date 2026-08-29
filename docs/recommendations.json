@@ -2237,7 +2237,7 @@
       "generated_at": "2026-08-29T07:11:30.838Z",
       "expires_at": "2026-08-29T07:41:30.838Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
