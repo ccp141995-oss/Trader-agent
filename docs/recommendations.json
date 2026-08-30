@@ -91,7 +91,7 @@
       "generated_at": "2026-08-30T13:58:53.338Z",
       "expires_at": "2026-08-30T14:28:53.338Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1106,7 +1106,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/sw6lowkw4b.png",
       "telegram_message_id": 469,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 2.45% since the recommendation (>2% max entry deviation) — skipped for safety"
     },
     {
       "coin": "SOL",
@@ -2288,7 +2289,7 @@
       "generated_at": "2026-08-30T13:26:52.646Z",
       "expires_at": "2026-08-30T13:56:52.646Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
