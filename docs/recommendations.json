@@ -94,7 +94,7 @@
       "generated_at": "2026-08-30T19:12:02.894Z",
       "expires_at": "2026-08-30T19:42:02.894Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1109,7 +1109,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/1zlv28rm8f.png",
       "telegram_message_id": 511,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 5.73% since the recommendation (>2% max entry deviation) — skipped for safety"
     },
     {
       "coin": "NEAR",
@@ -2267,7 +2268,7 @@
       "generated_at": "2026-08-30T18:41:24.157Z",
       "expires_at": "2026-08-30T19:11:24.157Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
