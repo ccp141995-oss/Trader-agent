@@ -88,7 +88,7 @@
       "generated_at": "2026-08-30T16:41:45.856Z",
       "expires_at": "2026-08-30T17:11:45.856Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1103,7 +1103,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/esx9p8ecn5.png",
       "telegram_message_id": 491,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-08-30T16:42:10.278Z"
     },
     {
       "coin": "TAO",
@@ -2261,7 +2262,7 @@
       "generated_at": "2026-08-30T16:11:28.109Z",
       "expires_at": "2026-08-30T16:41:28.110Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
