@@ -93,7 +93,7 @@
       "generated_at": "2026-08-30T14:42:07.316Z",
       "expires_at": "2026-08-30T15:12:07.316Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1108,7 +1108,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/k163es4hn8.png",
       "telegram_message_id": 475,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-08-30T14:42:31.139Z"
     },
     {
       "coin": "FARTCOIN",
@@ -2262,7 +2263,7 @@
       "generated_at": "2026-08-30T14:11:22.075Z",
       "expires_at": "2026-08-30T14:41:22.075Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
