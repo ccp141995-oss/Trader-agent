@@ -93,7 +93,7 @@
       "generated_at": "2026-08-30T17:13:19.204Z",
       "expires_at": "2026-08-30T17:43:19.204Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1108,7 +1108,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/v70xtzixk4.png",
       "telegram_message_id": 495,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Stop-loss is no longer below current price — thesis looks invalidated"
     },
     {
       "coin": "SUI",
