@@ -82,7 +82,7 @@
       "generated_at": "2026-08-30T05:28:27.544Z",
       "expires_at": "2026-08-30T05:58:27.544Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1097,7 +1097,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/vqc0t8ch3s.png",
       "telegram_message_id": 401,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for UNI"
     },
     {
       "coin": "ETH",
