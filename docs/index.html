@@ -2129,6 +2129,12 @@
       + "trade could fail (counterthesis), and briefly say why you're proposing it anyway despite that risk (counterthesis_response). If you can't come up with "
       + "a credible reason it could fail, or can't credibly answer your own counterthesis, drop the idea rather than force it. "
       + "Be concise: rationale <= 35 words, counterthesis <= 25 words, counterthesis_response <= 25 words. "
+      + `For suggested_size_pct_equity and suggested_leverage: this account's configured maximums are ${cfg.maxPositionPct}% of equity and ${cfg.maxLeverage}x leverage — `
+      + "these are hard caps enforced separately regardless of what you suggest, so there is no benefit to suggesting conservatively low numbers out of general caution. "
+      + "Scale your suggestion to reflect your actual conviction in *this specific idea* relative to that maximum: your highest-conviction setups (strong multi-factor "
+      + "confluence, clean technical structure, aligned trend) should suggest sizing at or near the maximum; only scale meaningfully below it for a setup you'd "
+      + "genuinely trade smaller yourself — a mediocre or borderline idea, not every idea by default. Do not suggest a token-sized position (e.g. 1-2% of a much "
+      + "higher maximum) for an idea you otherwise describe as high-conviction — that's an inconsistent signal. "
       + "CRITICAL: Respond with ONLY raw JSON — no markdown fences, no prose before or after, no explanation of your approach. Your entire response must be "
       + "parseable as JSON starting from the very first character. Match exactly: "
       + '{"recommendations":[{"coin":string,"direction":"long"|"short",'
