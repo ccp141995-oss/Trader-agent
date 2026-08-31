@@ -181,6 +181,14 @@
   .risk-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 
   .agent-scan-bar{display:flex;align-items:center;gap:8px;padding:2px 2px 12px;}
+  .pnl-summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
+  .pnl-stat{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:9px 11px;}
+  .pnl-stat .label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;}
+  .pnl-stat .value{font-family:'IBM Plex Mono';font-size:15px;font-weight:700;}
+  .pnl-trade-row{display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid var(--line-soft);font-size:12px;}
+  .pnl-trade-row:last-child{border-bottom:none;}
+  .pnl-trade-meta{color:var(--muted);font-size:11px;}
+  .pnl-trade-pnl{font-family:'IBM Plex Mono';font-weight:700;text-align:right;}
   .agent-scan-bar button{flex:1;padding:10px;background:var(--panel-2);border:1px solid var(--mint);color:var(--mint);border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;letter-spacing:.03em;}
   .agent-scan-bar button:disabled{opacity:.4;cursor:not-allowed;color:var(--muted);border-color:var(--line);}
   .agent-meta{font-size:10.5px;color:var(--muted-2);padding:0 2px 10px;}
@@ -365,6 +373,7 @@
       <div class="tab" data-tab="balances">Balances</div>
       <div class="tab" data-tab="agent">Agent</div>
       <div class="tab" data-tab="history">History</div>
+      <div class="tab" data-tab="pnl">P&amp;L</div>
     </div>
     <div class="panel-body">
       <div class="panel-view active" id="view-positions">
@@ -387,6 +396,15 @@
         </div>
         <div class="agent-meta" id="historyMeta">Every recommendation the dashboard has ever seen, whether from a manual scan or synced from the backend bot.</div>
         <div id="historyList"><div class="empty-state">No recommendation history yet.</div></div>
+      </div>
+      <div class="panel-view" id="view-pnl">
+        <div class="agent-scan-bar">
+          <button id="refreshPnlBtn">Refresh</button>
+        </div>
+        <div class="agent-meta" id="pnlMeta">Realized P&amp;L from your actual trade fills on Hyperliquid — connect an account to load.</div>
+        <div id="pnlSummary"></div>
+        <div id="pnlChartContainer" style="height:150px;margin:4px 0 10px;"></div>
+        <div id="pnlList"><div class="empty-state">No account connected.</div></div>
       </div>
     </div>
     <div class="log-header">
@@ -2767,6 +2785,107 @@
     }));
   }
 
+  // ---------------- P&L tab: realized profit/loss from actual Hyperliquid trade fills ----------------
+  let pnlChart = null, pnlSeries = null;
+
+  async function renderPnlView(){
+    const metaEl = document.getElementById('pnlMeta');
+    const listEl = document.getElementById('pnlList');
+    const summaryEl = document.getElementById('pnlSummary');
+    if(!cfg.address){
+      metaEl.textContent = 'Realized P&L from your actual trade fills on Hyperliquid — connect an account to load.';
+      listEl.innerHTML = '<div class="empty-state">No account connected.</div>';
+      summaryEl.innerHTML = '';
+      return;
+    }
+    metaEl.textContent = 'Loading trade history…';
+    let fills;
+    try{
+      fills = await infoPost({ type: 'userFills', user: cfg.address });
+    }catch(e){
+      metaEl.textContent = 'Could not load trade history: ' + e.message;
+      return;
+    }
+    if(!Array.isArray(fills) || !fills.length){
+      metaEl.textContent = 'Hyperliquid returns your most recent fills — for full history beyond that, use their own SQL Explorer.';
+      listEl.innerHTML = '<div class="empty-state">No trade fills found for this account.</div>';
+      summaryEl.innerHTML = '';
+      return;
+    }
+
+    // Hyperliquid computes realized P&L per fill already (closedPnl) — 0 for an opening fill,
+    // non-zero for whatever portion of a position that fill actually closed. Summary stats
+    // (win rate especially) only make sense computed over closing fills specifically; an
+    // opening fill isn't a win or a loss, and counting it as either would understate the rate.
+    const closingFills = fills.filter(f => parseFloat(f.closedPnl || '0') !== 0);
+    const totalPnl = fills.reduce((s,f) => s + parseFloat(f.closedPnl || '0'), 0);
+    const totalFees = fills.reduce((s,f) => s + parseFloat(f.fee || '0'), 0);
+    const netPnl = totalPnl - totalFees;
+    const wins = closingFills.filter(f => parseFloat(f.closedPnl) > 0).length;
+    const losses = closingFills.filter(f => parseFloat(f.closedPnl) < 0).length;
+    const winRate = (wins + losses) ? (wins / (wins + losses) * 100) : null;
+
+    const pnlColor = (v) => v > 0 ? 'var(--mint)' : v < 0 ? 'var(--red)' : 'var(--text)';
+    summaryEl.innerHTML = '<div class="pnl-summary">'
+      + '<div class="pnl-stat"><div class="label">Net P&L (after fees)</div><div class="value" style="color:'+pnlColor(netPnl)+'">'+fmtUsd(netPnl)+'</div></div>'
+      + '<div class="pnl-stat"><div class="label">Win rate</div><div class="value">'+(winRate!=null ? winRate.toFixed(0)+'%' : '—')+'</div></div>'
+      + '<div class="pnl-stat"><div class="label">Closing trades</div><div class="value">'+closingFills.length+' <span style="font-size:11px;color:var(--muted);font-weight:400;">('+wins+'W / '+losses+'L)</span></div></div>'
+      + '<div class="pnl-stat"><div class="label">Total fees paid</div><div class="value">'+fmtUsd(totalFees)+'</div></div>'
+      + '</div>';
+    metaEl.textContent = 'Based on your ' + fills.length + ' most recent fills from Hyperliquid — for full history beyond that depth, use their own SQL Explorer.';
+
+    // Cumulative net P&L over time, oldest first, for the chart below.
+    const sorted = fills.slice().sort((a,b) => a.time - b.time);
+    let running = 0;
+    const cumulative = sorted.map(f => {
+      running += parseFloat(f.closedPnl || '0') - parseFloat(f.fee || '0');
+      return { time: Math.floor(f.time / 1000), value: parseFloat(running.toFixed(2)) };
+    });
+    // LightweightCharts requires strictly increasing, unique timestamps per point — multiple
+    // fills in the same second would otherwise throw. Keep only the last point per second.
+    const dedupedCumulative = [];
+    cumulative.forEach(pt => {
+      if(dedupedCumulative.length && dedupedCumulative[dedupedCumulative.length-1].time === pt.time){
+        dedupedCumulative[dedupedCumulative.length-1] = pt;
+      } else {
+        dedupedCumulative.push(pt);
+      }
+    });
+
+    if(!pnlChart){
+      pnlChart = LightweightCharts.createChart(document.getElementById('pnlChartContainer'), {
+        layout:{ background:{color:'transparent'}, textColor:'#66707d', fontFamily:"'IBM Plex Mono', monospace", fontSize:10 },
+        grid:{ vertLines:{color:'#12161d'}, horzLines:{color:'#12161d'} },
+        rightPriceScale:{ borderColor:'#1c232e' },
+        timeScale:{ borderColor:'#1c232e', timeVisible:true, secondsVisible:false },
+        crosshair:{ mode: LightweightCharts.CrosshairMode.Normal },
+        autoSize:true
+      });
+      pnlSeries = pnlChart.addAreaSeries({
+        lineColor: netPnl >= 0 ? '#29f19c' : '#ff5c5c',
+        topColor: netPnl >= 0 ? 'rgba(41,241,156,0.25)' : 'rgba(255,92,92,0.25)',
+        bottomColor: 'rgba(0,0,0,0)',
+        lineWidth: 2
+      });
+    }
+    pnlSeries.applyOptions({ lineColor: netPnl >= 0 ? '#29f19c' : '#ff5c5c', topColor: netPnl >= 0 ? 'rgba(41,241,156,0.25)' : 'rgba(255,92,92,0.25)' });
+    pnlSeries.setData(dedupedCumulative);
+
+    // Individual fill list, most recent first — every fill shown (not just closes) so opens are
+    // visible for context, but P&L only displays where it's actually non-zero.
+    const listSorted = fills.slice().sort((a,b) => b.time - a.time);
+    listEl.innerHTML = listSorted.map(f => {
+      const pnl = parseFloat(f.closedPnl || '0');
+      const fee = parseFloat(f.fee || '0');
+      const pnlStr = pnl !== 0 ? (pnl > 0 ? '+' : '') + fmtUsd(pnl) : '—';
+      return '<div class="pnl-trade-row">'
+        + '<div><b>' + f.coin + '</b> ' + (f.dir || (f.side === 'B' ? 'Buy' : 'Sell'))
+        + '<div class="pnl-trade-meta">' + fmtNum(parseFloat(f.sz),4) + ' @ $' + fmtNum(parseFloat(f.px),2) + ' · ' + fmtExactTime(f.time) + ' · fee ' + fmtUsd(fee) + '</div></div>'
+        + '<div class="pnl-trade-pnl" style="color:' + pnlColor(pnl) + '">' + pnlStr + '</div>'
+        + '</div>';
+    }).join('');
+  }
+
   async function pollBackendFeed(){
     try{
       const res = await fetch(BACKEND_FEED_URL, { cache:'no-store' });
@@ -3713,6 +3832,7 @@
         document.querySelectorAll('.panel-view').forEach(v=>v.classList.remove('active'));
         document.getElementById('view-'+tab.dataset.tab).classList.add('active');
         if(tab.dataset.tab === 'history') renderHistoryView();
+        if(tab.dataset.tab === 'pnl') renderPnlView();
       });
     });
 
@@ -3724,6 +3844,8 @@
       renderHistoryView();
       log('Recommendation history cleared', 'ok');
     });
+
+    document.getElementById('refreshPnlBtn').addEventListener('click', ()=> renderPnlView());
 
     document.getElementById('expandLogBtn').addEventListener('click', ()=>{
       const container = document.getElementById('logContainer');
