@@ -1067,11 +1067,21 @@
   }
 
   async function loadSpotUsdcBalance(){
-    try{
-      const state = await infoPost({ type:'spotClearinghouseState', user: cfg.address });
-      const usdc = (state.balances || []).find(b => b.coin === 'USDC');
-      return usdc ? parseFloat(usdc.total) : 0;
-    }catch(e){ return null; }
+    // A silent, unlogged failure here (the previous version's catch just returned null with no
+    // trace) causes Math.max(perpEquity, spotUsdc || 0) elsewhere to fall back to perpEquity
+    // alone — which, on a unified account with no open positions, can be a tiny residual value
+    // rather than the real balance, with zero visible indication anything went wrong. Retrying
+    // before giving up, and logging clearly when it does, closes that gap.
+    for(let attempt = 1; attempt <= 3; attempt++){
+      try{
+        const state = await infoPost({ type:'spotClearinghouseState', user: cfg.address });
+        const usdc = (state.balances || []).find(b => b.coin === 'USDC');
+        return usdc ? parseFloat(usdc.total) : 0;
+      }catch(e){
+        if(attempt < 3){ await new Promise(r => setTimeout(r, attempt * 500)); }
+        else{ log('Spot balance fetch failed after retries (' + e.message + ') — equity displays may fall back to a partial value until this succeeds again.', 'err'); return null; }
+      }
+    }
   }  function renderPositions(state){
     const el = document.getElementById('positionsList');
     const exitBtn = document.getElementById('emergencyExitBtn');
@@ -1151,10 +1161,16 @@
     const withdrawable = state.withdrawable;
     const perpEquity = parseFloat(ms.accountValue) || 0;
     const spotUsdc = await loadSpotUsdcBalance();
-    const usingUnified = spotUsdc > perpEquity;
+    const spotFetchFailed = spotUsdc === null;
+    const usingUnified = (spotUsdc || 0) > perpEquity;
     const effectiveEquity = Math.max(perpEquity, spotUsdc || 0);
 
-    lastAccountValue = effectiveEquity || lastAccountValue;
+    // A genuine fetch failure (spotUsdc === null, distinct from a legitimate $0 balance) must
+    // not silently overwrite the last known-good value with an incomplete perpEquity-only
+    // reading — that's exactly how "equity shows way lower than it actually is" happens with no
+    // visible cause. Preserve the previous value instead, and the retry-then-log in
+    // loadSpotUsdcBalance above already surfaces why.
+    lastAccountValue = spotFetchFailed ? lastAccountValue : (effectiveEquity || lastAccountValue);
     lastWithdrawable = usingUnified ? spotUsdc : (isFinite(parseFloat(withdrawable)) ? parseFloat(withdrawable) : lastWithdrawable);
 
     let html = ''
