@@ -91,7 +91,7 @@
       "generated_at": "2026-08-31T05:42:03.408Z",
       "expires_at": "2026-08-31T06:12:03.408Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1106,7 +1106,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/u1h2pj9tao.png",
       "telegram_message_id": 589,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for ENA"
     },
     {
       "coin": "SOL",
@@ -2273,7 +2274,7 @@
       "generated_at": "2026-08-31T05:11:32.582Z",
       "expires_at": "2026-08-31T05:41:32.582Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
