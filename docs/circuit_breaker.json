@@ -1,12 +1,8 @@
 {
-  "tripped": false,
-  "trippedAt": null,
-  "reason": null,
+  "tripped": true,
+  "trippedAt": "2026-08-31T02:56:08.025Z",
+  "reason": "Equity dropped 95.4% in 24h ($983.43 → $45.31), at or beyond the 25% threshold.",
   "equityHistory": [
-    {
-      "t": 1787971952221,
-      "equity": 986.234598
-    },
     {
       "t": 1787972607685,
       "equity": 986.500928
@@ -1306,6 +1302,10 @@
     {
       "t": 1788144304726,
       "equity": 993.365759
+    },
+    {
+      "t": 1788144968025,
+      "equity": 45.314699
     }
   ]
 }
