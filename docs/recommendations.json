@@ -93,7 +93,7 @@
       "generated_at": "2026-08-31T09:42:28.261Z",
       "expires_at": "2026-08-31T10:12:28.261Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1108,7 +1108,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/ch4g94uzl1.png",
       "telegram_message_id": 621,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Stop-loss is 32.1% from price, exceeds your max stop-loss distance (20%) — skipped for safety"
     },
     {
       "coin": "FARTCOIN",
@@ -2263,7 +2264,7 @@
       "generated_at": "2026-08-31T09:11:28.861Z",
       "expires_at": "2026-08-31T09:41:28.861Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
