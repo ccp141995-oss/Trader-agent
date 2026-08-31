@@ -1844,6 +1844,28 @@
     return { direction: null, agree: Math.max(longCount, shortCount), total };
   }
 
+  // Ranks a coin's setup using only objective, code-computed signals available before the AI is
+  // ever involved. Used to narrow the field down to the strongest candidates prior to the AI
+  // research call, matching the same logic used in the backend scanner.
+  const MAX_COINS_FOR_AI = 5;
+  function computeTechnicalPreScore(signal, t15m, alignment){
+    let score = 0;
+    score += (alignment && alignment.agree) || 0;
+    if(t15m){
+      if(t15m.adx14 != null){
+        if(t15m.adx14 >= 25) score += 2;
+        else if(t15m.adx14 >= 20) score += 1;
+      }
+      score += Math.min((t15m.patterns || []).length, 3);
+      (t15m.chartPatterns || []).forEach(cp => { score += cp.confirmed ? 2 : 0.5; });
+    }
+    if(signal){
+      score += Math.min(signal.volRatio || 0, 5) * 0.5;
+      score += Math.min(Math.abs(signal.imbalance || 0), 1) * 2;
+    }
+    return score;
+  }
+
   function formatMultiTimeframeBlock(coin, mtf, alignment){
     const f = (v,d) => v==null ? 'n/a' : v.toFixed(d);
     const lines = MTF_INTERVALS.map(iv => {
@@ -2359,6 +2381,48 @@
       if(skipped.length) log('Skipping (already has a pending recommendation): ' + skipped.join(', '), '');
       if(!alignedCoins.length){
         metaEl.textContent = 'Aligned coins already have pending recommendations — nothing new this scan.';
+        btn.disabled = false; btn.textContent = 'Scan for opportunities';
+        return;
+      }
+
+      // Narrow to the strongest technical setups before any per-rec work (AI call included) —
+      // ranked purely on objective, code-computed signals, matching the backend scanner.
+      if(alignedCoins.length > MAX_COINS_FOR_AI){
+        const scored = alignedCoins.map(c => ({ coin: c, score: computeTechnicalPreScore(signals[c], mtfData[c]['15m'], alignments[c]) }));
+        scored.sort((a,b) => b.score - a.score);
+        const kept = scored.slice(0, MAX_COINS_FOR_AI);
+        const dropped = scored.slice(MAX_COINS_FOR_AI);
+        log(`Technical pre-ranking: keeping top ${MAX_COINS_FOR_AI} of ${alignedCoins.length} — ` + kept.map(s => s.coin+' ('+s.score.toFixed(1)+')').join(', '), 'ok');
+        if(dropped.length) log('Dropped (weaker technical score): ' + dropped.map(s => s.coin+' ('+s.score.toFixed(1)+')').join(', '), '');
+        alignedCoins = kept.map(s => s.coin);
+      }
+
+      // Gathering technicals for several coins takes real time — if a coin's live price has
+      // already moved beyond the configured max entry deviation since its 15m snapshot was
+      // captured, that snapshot is stale by the time it would reach the AI, and the resulting
+      // recommendation's entry would likely just get rejected by the existing entry-deviation
+      // check later anyway. Uses lastMids directly (refreshed every 3s by the existing poll
+      // loop) rather than a new fetch, since it's already essentially live.
+      {
+        const stillFresh = [];
+        const staleDropped = [];
+        alignedCoins.forEach(c => {
+          const snapshotPx = mtfData[c]['15m'] && mtfData[c]['15m'].lastClose;
+          const livePx = lastMids[c] ? parseFloat(lastMids[c]) : null;
+          if(snapshotPx && livePx){
+            const driftPct = Math.abs(livePx - snapshotPx) / snapshotPx * 100;
+            if(driftPct > cfg.maxEntryDeviationPct){
+              staleDropped.push(c + ' (' + driftPct.toFixed(2) + '% drift)');
+              return;
+            }
+          }
+          stillFresh.push(c);
+        });
+        if(staleDropped.length) log(`Dropped before AI research — price already moved beyond the ${cfg.maxEntryDeviationPct}% max entry deviation since the technical snapshot: ` + staleDropped.join(', '), 'err');
+        alignedCoins = stillFresh;
+      }
+      if(!alignedCoins.length){
+        metaEl.textContent = 'Nothing left to research after the price-staleness check.';
         btn.disabled = false; btn.textContent = 'Scan for opportunities';
         return;
       }
