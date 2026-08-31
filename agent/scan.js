@@ -47,6 +47,7 @@ let MAX_TAKE_PROFIT_PCT = parseFloat(process.env.MAX_TAKE_PROFIT_PCT || '15');
 let MAX_ENTRY_DEVIATION_PCT = parseFloat(process.env.MAX_ENTRY_DEVIATION_PCT || '2');
 const MIN_ORDER_NOTIONAL = 10; // Hyperliquid rejects any order below $10 notional, exchange-wide
 let MAX_RECS_PER_SCAN = parseFloat(process.env.MAX_RECS_PER_SCAN || '1'); // keep only the top-N by confidence, even if more candidates qualify
+const MAX_COINS_FOR_AI = 5; // rank by technicals-only signal strength before the AI ever sees them, keeping cost/focus bounded regardless of how many coins align in a given scan
 const AUTO_TRADE_MIN_SCORE = 6; // out of 8 — only the #1-ranked rec, and only at/above this score, auto-executes
 // Lower-confidence auto-trades risk less capital, scaled by score. This scales position SIZE
 // specifically, not leverage — the dollar amount actually at risk if a stop is hit is driven by
@@ -1229,6 +1230,36 @@ function formatTelegramMessage(rec){
   return lines.join('\n');
 }
 
+// Ranks a coin's setup using only objective, code-computed signals available BEFORE the AI is
+// ever involved — the same free technical/signal data already gathered for every aligned coin.
+// Used to narrow the field down to the strongest candidates prior to the (paid) AI research
+// call, rather than sending every aligned coin regardless of how many happen to qualify in a
+// given scan.
+function computeTechnicalPreScore(signal, t15m, alignment){
+  let score = 0;
+  // Stronger multi-timeframe agreement (3/3 vs 2/3) is the primary signal.
+  score += (alignment && alignment.agree) || 0;
+  if(t15m){
+    // ADX trend strength, same 25/20 thresholds used elsewhere for the objective conviction bonus.
+    if(t15m.adx14 != null){
+      if(t15m.adx14 >= 25) score += 2;
+      else if(t15m.adx14 >= 20) score += 1;
+    }
+    // Candlestick patterns detected at the 15m reference timeframe, capped so one noisy coin
+    // with many minor patterns can't dominate purely on pattern count.
+    score += Math.min((t15m.patterns || []).length, 3);
+    // Confirmed chart patterns count more than ones still forming.
+    (t15m.chartPatterns || []).forEach(cp => { score += cp.confirmed ? 2 : 0.5; });
+  }
+  if(signal){
+    // Original signal strength that tripped this coin in the first place — capped so an extreme
+    // outlier reading doesn't swamp every other factor.
+    score += Math.min(signal.volRatio || 0, 5) * 0.5;
+    score += Math.min(Math.abs(signal.imbalance || 0), 1) * 2;
+  }
+  return score;
+}
+
 async function main(){
   const shared = loadSharedConfig();
   if(shared){
@@ -1336,6 +1367,49 @@ async function main(){
   scanCoins = scanCoins.filter(c => !alreadyPending.has(c));
   if(skippedAsPending.length) console.log('Skipping (already has a pending recommendation): ' + skippedAsPending.join(', '));
   if(!scanCoins.length){ console.log('Nothing new to propose this run.'); return; }
+
+  // Narrow to the strongest technical setups before any per-rec work (AI call included) happens
+  // on the rest — ranked purely on objective, code-computed signals, nothing AI-derived, since
+  // this decision has to be made before the AI is ever consulted.
+  if(scanCoins.length > MAX_COINS_FOR_AI){
+    const scored = scanCoins.map(c => ({ coin: c, score: computeTechnicalPreScore(signals[c], mtfData[c]['15m'], alignments[c]) }));
+    scored.sort((a,b) => b.score - a.score);
+    const kept = scored.slice(0, MAX_COINS_FOR_AI);
+    const dropped = scored.slice(MAX_COINS_FOR_AI);
+    console.log(`Technical pre-ranking: keeping top ${MAX_COINS_FOR_AI} of ${scanCoins.length} aligned coins — `
+      + kept.map(s => `${s.coin} (${s.score.toFixed(1)})`).join(', ')
+      + ' | dropped: ' + dropped.map(s => `${s.coin} (${s.score.toFixed(1)})`).join(', '));
+    scanCoins = kept.map(s => s.coin);
+  }
+
+  // Gathering technicals for several coins (each fetching 15m/1h/4h candles, with retries) takes
+  // real time — if a coin's live price has already moved beyond the configured max entry
+  // deviation since its 15m snapshot was captured, that snapshot is stale by the time it would
+  // reach the AI, and the resulting recommendation's entry would likely just get rejected by the
+  // existing entry-deviation check later anyway. Catching it here avoids spending an AI call
+  // analyzing a setup that's already moved on.
+  try{
+    const liveMids = await infoPost({ type: 'allMids' });
+    const stillFresh = [];
+    const staleDropped = [];
+    scanCoins.forEach(c => {
+      const snapshotPx = mtfData[c]['15m'] && mtfData[c]['15m'].lastClose;
+      const livePx = liveMids[c] ? parseFloat(liveMids[c]) : null;
+      if(snapshotPx && livePx){
+        const driftPct = Math.abs(livePx - snapshotPx) / snapshotPx * 100;
+        if(driftPct > MAX_ENTRY_DEVIATION_PCT){
+          staleDropped.push(`${c} (${driftPct.toFixed(2)}% drift)`);
+          return;
+        }
+      }
+      stillFresh.push(c);
+    });
+    if(staleDropped.length) console.log(`Dropped before AI research — price already moved beyond the ${MAX_ENTRY_DEVIATION_PCT}% max entry deviation since the technical snapshot: ${staleDropped.join(', ')}`);
+    scanCoins = stillFresh;
+  }catch(e){
+    console.error('Could not check for pre-AI price staleness (' + e.message + ') — proceeding without this check this run.');
+  }
+  if(!scanCoins.length){ console.log('Nothing left to research after the price-staleness check.'); return; }
 
   const subsetSignals = {};
   scanCoins.forEach(c => { if(signals[c]) subsetSignals[c] = signals[c]; });
