@@ -89,7 +89,7 @@
       "generated_at": "2026-08-31T16:57:39.987Z",
       "expires_at": "2026-08-31T17:27:39.987Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1104,7 +1104,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/31jpcnenir.png",
       "telegram_message_id": 679,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-08-31T16:58:01.235Z"
     },
     {
       "coin": "TRUMP",
@@ -2257,7 +2258,7 @@
       "generated_at": "2026-08-31T16:26:39.978Z",
       "expires_at": "2026-08-31T16:56:39.978Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
