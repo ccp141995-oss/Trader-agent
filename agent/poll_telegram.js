@@ -258,17 +258,30 @@ function loadCircuitBreakerState(){
 }
 function saveCircuitBreakerState(cb){ writeJson(CIRCUIT_BREAKER_PATH, cb); }
 
-// Records the current equity as a timestamped sample (used to build the rolling 24h baseline)
-// and checks for a sustained drawdown — comparing against the equity from ~24h ago specifically,
-// not "since the bot started" or "since midnight", so normal position volatility over minutes or
-// hours doesn't false-trigger; only a genuine decline sustained across a full day does.
+// Records the current *unified USD balance* (not the Math.max'd "effective equity" used
+// elsewhere) as a timestamped sample, and checks for a sustained drawdown against the sample
+// from ~24h ago. Deliberately uses spotUsdc alone, not Math.max(perpEquity, spotUsdc): on this
+// account's unified setup, accountValue (the perps-specific ledger) starts near-zero and only
+// grows as margin gets allocated to open positions, while spotUsdc reflects the complete unified
+// pool per Hyperliquid's own documented behavior for this account type. Opening several
+// positions in succession shifts capital between the two in a way that can make Math.max briefly
+// pick up a spurious dip — a false signal of loss, not an actual one, since nothing was lost.
+// spotUsdc alone is the number that should stay stable regardless of how much is currently
+// allocated as margin, so it's the correct thing to compare 24h-over-24h for this specific check.
 async function recordEquityAndCheckDrawdown(){
-  const { effectiveEquity } = await getEffectiveEquity();
+  const { spotUsdc, spotFetchFailed, perpEquity } = await getEffectiveEquity();
   const cb = loadCircuitBreakerState();
-  if(effectiveEquity == null) return cb; // couldn't read equity this run — don't record a bad sample
+  if(spotUsdc == null || spotFetchFailed) return cb; // couldn't read the balance this run — don't record a bad sample
+
+  // If spot reads near-zero while real value sits in the perps ledger, this account isn't
+  // unified the way this fix assumes — tracking spotUsdc alone would silently make the circuit
+  // breaker blind to a genuine drawdown. Surfacing this loudly rather than failing silently.
+  if(spotUsdc < 1 && perpEquity > MIN_ORDER_NOTIONAL){
+    console.error(`WARNING: circuit breaker tracks unified USD balance (spotUsdc=$${spotUsdc.toFixed(2)}), but perps equity is $${perpEquity.toFixed(2)} — this account may not be unified, and the circuit breaker may not be seeing real value changes. Check the account snapshot in Telegram.`);
+  }
 
   const now = Date.now();
-  cb.equityHistory = (cb.equityHistory || []).concat([{ t: now, equity: effectiveEquity }]);
+  cb.equityHistory = (cb.equityHistory || []).concat([{ t: now, equity: spotUsdc }]);
   // Prune anything older than 48h — we only ever need up to a 24h-old baseline, a second day of
   // slack covers any gap in scheduled runs without the file growing indefinitely.
   const cutoff = now - 48 * 60 * 60 * 1000;
@@ -282,11 +295,11 @@ async function recordEquityAndCheckDrawdown(){
   const baseline = baselineCandidates[baselineCandidates.length - 1]; // closest sample to exactly 24h old
 
   if(baseline.equity > 0){
-    const drawdownPct = (baseline.equity - effectiveEquity) / baseline.equity * 100;
+    const drawdownPct = (baseline.equity - spotUsdc) / baseline.equity * 100;
     if(drawdownPct >= CIRCUIT_BREAKER_DRAWDOWN_PCT){
       cb.tripped = true;
       cb.trippedAt = new Date(now).toISOString();
-      cb.reason = `Equity dropped ${drawdownPct.toFixed(1)}% in 24h ($${baseline.equity.toFixed(2)} → $${effectiveEquity.toFixed(2)}), at or beyond the ${CIRCUIT_BREAKER_DRAWDOWN_PCT}% threshold.`;
+      cb.reason = `Unified USD balance dropped ${drawdownPct.toFixed(1)}% in 24h ($${baseline.equity.toFixed(2)} → $${spotUsdc.toFixed(2)}), at or beyond the ${CIRCUIT_BREAKER_DRAWDOWN_PCT}% threshold.`;
     }
   }
   saveCircuitBreakerState(cb);
