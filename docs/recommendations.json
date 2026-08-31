@@ -2253,7 +2253,7 @@
       "generated_at": "2026-08-31T18:13:03.123Z",
       "expires_at": "2026-08-31T18:43:03.123Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
