@@ -90,7 +90,7 @@
       "generated_at": "2026-08-31T16:13:55.191Z",
       "expires_at": "2026-08-31T16:43:55.191Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1105,7 +1105,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/i8bkl2ue7r.png",
       "telegram_message_id": 673,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 83.57% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "XPL",
@@ -2270,7 +2271,7 @@
       "generated_at": "2026-08-31T15:41:55.512Z",
       "expires_at": "2026-08-31T16:11:55.513Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
