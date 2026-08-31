@@ -86,7 +86,7 @@
       "generated_at": "2026-08-31T12:14:39.809Z",
       "expires_at": "2026-08-31T12:44:39.809Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1101,7 +1101,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/c2jhjdapj5.png",
       "telegram_message_id": 641,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for ENA"
     },
     {
       "coin": "UNI",
@@ -2282,7 +2283,7 @@
       "generated_at": "2026-08-31T11:42:30.419Z",
       "expires_at": "2026-08-31T12:12:30.419Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
