@@ -83,7 +83,7 @@
       "generated_at": "2026-09-01T09:34:36.591Z",
       "expires_at": "2026-09-01T10:04:36.591Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1098,7 +1098,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/m2vvgg0qb3.png",
       "telegram_message_id": 808,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for UNI"
     },
     {
       "coin": "TRUMP",
@@ -3381,7 +3382,7 @@
       "generated_at": "2026-09-01T08:51:08.545Z",
       "expires_at": "2026-09-01T09:21:08.546Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
