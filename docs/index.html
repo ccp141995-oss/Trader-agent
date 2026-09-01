@@ -2440,19 +2440,31 @@
       {
         const stillFresh = [];
         const staleDropped = [];
+        const missingDataDropped = [];
         alignedCoins.forEach(c => {
           const snapshotPx = mtfData[c]['15m'] && mtfData[c]['15m'].lastClose;
           const livePx = lastMids[c] ? parseFloat(lastMids[c]) : null;
-          if(snapshotPx && livePx){
-            const driftPct = Math.abs(livePx - snapshotPx) / snapshotPx * 100;
-            if(driftPct > cfg.maxEntryDeviationPct){
-              staleDropped.push(c + ' (' + driftPct.toFixed(2) + '% drift)');
-              return;
-            }
+          // Fail closed, not open: only proceed if both prices are present and genuinely valid
+          // numbers. Checking drift only when both happened to already be present meant a
+          // missing or corrupted price (NaN, zero, or absent from lastMids) skipped the check
+          // entirely and passed through unvalidated — the opposite of what a safety check
+          // should do, and a far more likely explanation for an extreme deviation than a
+          // genuine market move that large.
+          const snapshotValid = isFinite(snapshotPx) && snapshotPx > 0;
+          const liveValid = isFinite(livePx) && livePx > 0;
+          if(!snapshotValid || !liveValid){
+            missingDataDropped.push(c + ' (snapshot=' + snapshotPx + ', live=' + livePx + ')');
+            return;
+          }
+          const driftPct = Math.abs(livePx - snapshotPx) / snapshotPx * 100;
+          if(driftPct > cfg.maxEntryDeviationPct){
+            staleDropped.push(c + ' (' + driftPct.toFixed(2) + '% drift)');
+            return;
           }
           stillFresh.push(c);
         });
         if(staleDropped.length) log(`Dropped before AI research — price already moved beyond the ${cfg.maxEntryDeviationPct}% max entry deviation since the technical snapshot: ` + staleDropped.join(', '), 'err');
+        if(missingDataDropped.length) log('Dropped before AI research — missing or invalid live price data (failing closed rather than proceeding unvalidated): ' + missingDataDropped.join(', '), 'err');
         alignedCoins = stillFresh;
       }
       if(!alignedCoins.length){
