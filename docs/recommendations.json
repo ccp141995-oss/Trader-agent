@@ -101,7 +101,7 @@
       "generated_at": "2026-09-01T08:59:31.267Z",
       "expires_at": "2026-09-01T09:29:31.267Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1116,7 +1116,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/eeaao2rltv.png",
       "telegram_message_id": 804,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for ENA"
     },
     {
       "coin": "NEAR",
