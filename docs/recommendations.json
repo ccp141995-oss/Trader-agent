@@ -85,7 +85,7 @@
       "generated_at": "2026-09-01T00:30:22.466Z",
       "expires_at": "2026-09-01T01:00:22.467Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1100,7 +1100,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/psim4jku83.png",
       "telegram_message_id": 737,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 5.40% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "SKR",
@@ -1190,7 +1191,7 @@
       "generated_at": "2026-08-31T23:58:30.142Z",
       "expires_at": "2026-09-01T00:28:30.142Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
