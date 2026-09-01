@@ -95,7 +95,7 @@
       "generated_at": "2026-09-01T19:56:47.612Z",
       "expires_at": "2026-09-01T20:26:47.612Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1110,7 +1110,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/6omb3k8v3w.png",
       "telegram_message_id": 885,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-01T19:57:11.194Z"
     },
     {
       "coin": "UNI",
