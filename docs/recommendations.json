@@ -89,7 +89,7 @@
       "generated_at": "2026-09-01T17:58:21.144Z",
       "expires_at": "2026-09-01T18:28:21.144Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1104,7 +1104,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/fple1z0jq0.png",
       "telegram_message_id": 869,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 83.33% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "CASHCAT",
