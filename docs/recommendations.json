@@ -82,7 +82,7 @@
       "generated_at": "2026-09-01T15:35:54.971Z",
       "expires_at": "2026-09-01T16:05:54.972Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1097,7 +1097,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/usbsxxxdgc.png",
       "telegram_message_id": 853,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for TRX"
     },
     {
       "coin": "BTC",
@@ -1156,7 +1157,7 @@
       "generated_at": "2026-09-01T15:00:32.087Z",
       "expires_at": "2026-09-01T15:30:32.087Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
@@ -3345,7 +3346,7 @@
       "generated_at": "2026-09-01T14:34:53.183Z",
       "expires_at": "2026-09-01T15:04:53.183Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
