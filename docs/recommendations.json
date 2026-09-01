@@ -90,7 +90,7 @@
       "generated_at": "2026-09-01T23:16:42.371Z",
       "expires_at": "2026-09-01T23:46:42.372Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1105,7 +1105,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/ek4rcndybo.png",
       "telegram_message_id": 912,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for LINK"
     },
     {
       "coin": "NEAR",
