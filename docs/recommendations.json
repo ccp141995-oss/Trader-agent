@@ -90,7 +90,7 @@
       "generated_at": "2026-09-01T16:24:48.228Z",
       "expires_at": "2026-09-01T16:54:48.228Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1105,7 +1105,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/v55x44o8ro.png",
       "telegram_message_id": 858,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-01T16:25:15.399Z"
     },
     {
       "coin": "TRX",
