@@ -1392,22 +1392,38 @@ async function main(){
     const liveMids = await infoPost({ type: 'allMids' });
     const stillFresh = [];
     const staleDropped = [];
+    const missingDataDropped = [];
     scanCoins.forEach(c => {
       const snapshotPx = mtfData[c]['15m'] && mtfData[c]['15m'].lastClose;
       const livePx = liveMids[c] ? parseFloat(liveMids[c]) : null;
-      if(snapshotPx && livePx){
-        const driftPct = Math.abs(livePx - snapshotPx) / snapshotPx * 100;
-        if(driftPct > MAX_ENTRY_DEVIATION_PCT){
-          staleDropped.push(`${c} (${driftPct.toFixed(2)}% drift)`);
-          return;
-        }
+      // Fail closed, not open: a coin can only proceed if BOTH prices are present and genuinely
+      // valid numbers. The previous version only checked drift when both happened to be present,
+      // meaning a missing or corrupted price (NaN, zero, or the coin absent from allMids
+      // entirely) skipped the check and passed through to the AI completely unvalidated — the
+      // opposite of what a safety check should do. A corrupted snapshot price, not a genuine
+      // 80%+ market move, is a far more likely explanation for a deviation that large anyway.
+      const snapshotValid = isFinite(snapshotPx) && snapshotPx > 0;
+      const liveValid = isFinite(livePx) && livePx > 0;
+      if(!snapshotValid || !liveValid){
+        missingDataDropped.push(`${c} (snapshot=${snapshotPx}, live=${livePx})`);
+        return;
+      }
+      const driftPct = Math.abs(livePx - snapshotPx) / snapshotPx * 100;
+      if(driftPct > MAX_ENTRY_DEVIATION_PCT){
+        staleDropped.push(`${c} (${driftPct.toFixed(2)}% drift)`);
+        return;
       }
       stillFresh.push(c);
     });
     if(staleDropped.length) console.log(`Dropped before AI research — price already moved beyond the ${MAX_ENTRY_DEVIATION_PCT}% max entry deviation since the technical snapshot: ${staleDropped.join(', ')}`);
+    if(missingDataDropped.length) console.log(`Dropped before AI research — missing or invalid live price data (failing closed rather than proceeding unvalidated): ${missingDataDropped.join(', ')}`);
     scanCoins = stillFresh;
   }catch(e){
-    console.error('Could not check for pre-AI price staleness (' + e.message + ') — proceeding without this check this run.');
+    // If the live-price fetch itself fails, we cannot validate ANY coin's freshness this run —
+    // failing closed here too (dropping everything) rather than proceeding with unvalidated data
+    // for every coin, which is what silently happened before.
+    console.error('Could not fetch live prices for the pre-AI staleness check (' + e.message + ') — skipping AI research entirely this run rather than proceeding with unvalidated prices.');
+    scanCoins = [];
   }
   if(!scanCoins.length){ console.log('Nothing left to research after the price-staleness check.'); return; }
 
