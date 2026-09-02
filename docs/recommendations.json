@@ -82,7 +82,7 @@
       "generated_at": "2026-09-02T22:56:44.837Z",
       "expires_at": "2026-09-02T23:26:44.838Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1097,7 +1097,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/kccl2y44yu.png",
       "telegram_message_id": 1091,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 5.59% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "PONS",
