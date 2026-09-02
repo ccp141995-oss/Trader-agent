@@ -88,7 +88,7 @@
       "generated_at": "2026-09-02T13:58:51.767Z",
       "expires_at": "2026-09-02T14:28:51.767Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1103,7 +1103,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/j0ec5jwewo.png",
       "telegram_message_id": 1022,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 6.28% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "HYPE",
