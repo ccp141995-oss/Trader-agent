@@ -87,7 +87,7 @@
       "generated_at": "2026-09-02T09:36:11.075Z",
       "expires_at": "2026-09-02T10:06:11.076Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1102,7 +1102,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/nhir5xilvo.png",
       "telegram_message_id": 990,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 83.09% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "PONS",
