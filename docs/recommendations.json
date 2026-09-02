@@ -90,7 +90,7 @@
       "generated_at": "2026-09-02T23:29:15.770Z",
       "expires_at": "2026-09-02T23:59:15.770Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1105,7 +1105,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/umq1lo9ybe.png",
       "telegram_message_id": 1095,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-02T23:29:38.458Z"
     },
     {
       "coin": "CRV",
