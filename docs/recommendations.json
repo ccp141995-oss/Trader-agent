@@ -87,7 +87,7 @@
       "generated_at": "2026-09-02T05:56:55.131Z",
       "expires_at": "2026-09-02T06:26:55.131Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1102,7 +1102,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/8y64npomor.png",
       "telegram_message_id": 964,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 5.93% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "UNI",
