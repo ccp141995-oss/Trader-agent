@@ -81,7 +81,7 @@
       "generated_at": "2026-09-02T15:05:47.842Z",
       "expires_at": "2026-09-02T15:35:47.842Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1096,7 +1096,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/9ezb9iahqa.png",
       "telegram_message_id": 1030,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 82.94% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "TRUMP",
