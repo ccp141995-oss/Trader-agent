@@ -86,7 +86,7 @@
       "generated_at": "2026-09-02T13:20:49.988Z",
       "expires_at": "2026-09-02T13:50:49.988Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1101,7 +1101,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/m7jb6aji9w.png",
       "telegram_message_id": 1016,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-02T13:21:14.491Z"
     },
     {
       "coin": "AAVE",
