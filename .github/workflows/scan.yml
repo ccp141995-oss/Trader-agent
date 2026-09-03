@@ -42,6 +42,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           HL_ACCOUNT_ADDRESS: ${{ secrets.HL_ACCOUNT_ADDRESS }}
           WATCHLIST: ${{ vars.WATCHLIST }}
+          EXCLUDED_COINS: ${{ vars.EXCLUDED_COINS }}
           SCAN_MODE: ${{ vars.SCAN_MODE }}
           FILTERED_TOP_N: ${{ vars.FILTERED_TOP_N }}
           FILTERED_MIN_OI: ${{ vars.FILTERED_MIN_OI }}
@@ -54,6 +55,7 @@ jobs:
           MAX_STOP_LOSS_PCT: ${{ vars.MAX_STOP_LOSS_PCT }}
           AI_RESEARCH_ENABLED: ${{ vars.AI_RESEARCH_ENABLED }}
           AUTO_TRADE_ENABLED: ${{ vars.AUTO_TRADE_ENABLED }}
+          CONTRARIAN_MODE: ${{ vars.CONTRARIAN_MODE }}
           MAX_RECS_PER_SCAN: ${{ vars.MAX_RECS_PER_SCAN }}
           MAX_TAKE_PROFIT_PCT: ${{ vars.MAX_TAKE_PROFIT_PCT }}
           MAX_ENTRY_DEVIATION_PCT: ${{ vars.MAX_ENTRY_DEVIATION_PCT }}
