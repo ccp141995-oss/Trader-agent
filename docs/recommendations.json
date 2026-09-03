@@ -83,7 +83,7 @@
       "generated_at": "2026-09-03T07:22:41.877Z",
       "expires_at": "2026-09-03T07:52:41.877Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1098,7 +1098,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/uivjmd6sly.png",
       "telegram_message_id": 1124,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-03T07:23:05.392Z"
     },
     {
       "coin": "XMR",
@@ -2294,7 +2295,7 @@
       "generated_at": "2026-09-03T06:50:09.687Z",
       "expires_at": "2026-09-03T07:20:09.687Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
