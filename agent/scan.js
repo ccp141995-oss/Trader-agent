@@ -29,6 +29,11 @@ function hyperliquidChartUrl(coin){
 const INFO_URL = HL_NETWORK === 'testnet' ? 'https://api.hyperliquid-testnet.xyz/info' : 'https://api.hyperliquid.xyz/info';
 const WATCHLIST_DEFAULT = (process.env.WATCHLIST || 'BTC,ETH,SOL,HYPE').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 let WATCHLIST = WATCHLIST_DEFAULT;
+// Applies regardless of SCAN_MODE — a coin listed here is never examined at all, whether it
+// would otherwise come from the hand-typed watchlist or the dynamically-built filtered universe.
+// Distinct from simply removing a coin from the watchlist: this also blocks it from filtered
+// mode, so switching between modes doesn't require remembering to exclude it in both places.
+let EXCLUDED_COINS = (process.env.EXCLUDED_COINS || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 let SCAN_MODE = (process.env.SCAN_MODE || 'watchlist').toLowerCase();
 let FILTERED_TOP_N = parseInt(process.env.FILTERED_TOP_N || '20', 10);
 let FILTERED_MIN_OI = parseFloat(process.env.FILTERED_MIN_OI || '1000000');
@@ -60,6 +65,12 @@ let MAX_LEVERAGE = parseFloat(process.env.MAX_LEVERAGE || '3');
 let DEFAULT_TAKE_PROFIT_PCT = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '3');
 let AI_RESEARCH_ENABLED = (process.env.AI_RESEARCH_ENABLED || 'true').toLowerCase() !== 'false';
 let AUTO_TRADE_ENABLED = (process.env.AUTO_TRADE_ENABLED || 'false').toLowerCase() === 'true';
+// When on, every recommendation's direction is flipped from what the normal analysis concluded
+// (long becomes short, short becomes long) — fading the signal rather than following it. The
+// underlying technical read, rationale, and confluence score are left untouched and clearly
+// labeled as the original (now-faded) thesis, rather than rewritten to falsely justify the
+// flipped direction, since that would misrepresent what the analysis actually found.
+let CONTRARIAN_MODE = (process.env.CONTRARIAN_MODE || 'false').toLowerCase() === 'true';
 
 function shortId(){
   return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -181,6 +192,15 @@ async function loadFilteredUniverse(){
 }
 
 async function resolveCoins(){
+  const coins = await resolveCoinsUnfiltered();
+  if(!EXCLUDED_COINS.length) return coins;
+  const filtered = coins.filter(c => !EXCLUDED_COINS.includes(c));
+  const excluded = coins.filter(c => EXCLUDED_COINS.includes(c));
+  if(excluded.length) console.log(`Excluding per configured exclusion list: ${excluded.join(', ')}`);
+  return filtered;
+}
+
+async function resolveCoinsUnfiltered(){
   if(SCAN_MODE === 'filtered') return loadFilteredUniverse();
 
   // Unlike filtered mode (which only ever sees genuinely perp-listed coins, since
@@ -1184,8 +1204,9 @@ function formatTelegramMessage(rec){
     : null;
 
   const lines = [];
-  lines.push(`🤖 JARVIS — ${rec.coin} ${dir}`);
+  lines.push(`🤖 JARVIS — ${rec.coin} ${dir}${rec.contrarian_mode ? ' ⚡CONTRARIAN' : ''}`);
   lines.push(`${rec.conviction || 'low'} conviction · ${rec.confluence_score != null ? rec.confluence_score + '/8 factors' : 'n/a'}${consistencyNote}${rec.trend_strength ? ' · ' + rec.trend_strength + ' trend' : ''}${fallbackNote}`);
+  if(rec.contrarian_mode) lines.push(`⚡ Contrarian mode: analysis concluded ${rec.original_direction}, this trade fades it and takes ${rec.direction} instead.`);
   if(timestamp) lines.push(`Recommended: ${timestamp}`);
 
   lines.push('');
@@ -1260,10 +1281,42 @@ function computeTechnicalPreScore(signal, t15m, alignment){
   return score;
 }
 
+// Flips a recommendation's direction to the opposite of what the normal analysis concluded.
+// Critically, stop-loss and take-profit are directionally dependent — a short's stop must sit
+// ABOVE entry and its target BELOW, the mirror image of a long — so simply relabeling direction
+// while leaving the price levels untouched would produce a stop on the wrong side of entry,
+// which Hyperliquid would likely reject outright or which would trigger immediately. This
+// preserves the original distances from entry (and therefore the same risk/reward ratio the
+// analysis arrived at) and mirrors them to the opposite side, rather than inventing new levels.
+function applyContrarianFlip(rec){
+  const originalDirection = rec.direction;
+  const entry = rec.entry_price;
+  const stopDistance = Math.abs(entry - rec.stop_loss_price);
+  const flippedDirection = originalDirection === 'long' ? 'short' : 'long';
+
+  rec.direction = flippedDirection;
+  rec.stop_loss_price = flippedDirection === 'long' ? entry - stopDistance : entry + stopDistance;
+  if(rec.take_profit_price != null){
+    const targetDistance = Math.abs(entry - rec.take_profit_price);
+    rec.take_profit_price = flippedDirection === 'long' ? entry + targetDistance : entry - targetDistance;
+  }
+
+  // Preserve the original thesis for transparency rather than rewriting it to falsely justify
+  // the flipped direction — the technical read is genuinely for the original direction, and
+  // pretending otherwise would misrepresent what the analysis actually found.
+  rec.contrarian_mode = true;
+  rec.original_direction = originalDirection;
+  rec.original_rationale = rec.rationale;
+  rec.rationale = `CONTRARIAN: fading a ${originalDirection} signal (score ${rec.confluence_score != null ? rec.confluence_score+'/8' : 'n/a'}). Original thesis: ${rec.rationale}`;
+  rec.risk_flags = (rec.risk_flags || []).concat([`Contrarian mode: taking ${flippedDirection} against the analysis's own ${originalDirection} conclusion — this deliberately fades the signal rather than following it.`]);
+  return rec;
+}
+
 async function main(){
   const shared = loadSharedConfig();
   if(shared){
     if(shared.watchlist) WATCHLIST = shared.watchlist.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+    if(shared.excludedCoins !== undefined) EXCLUDED_COINS = (shared.excludedCoins || '').split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
     if(shared.scanMode) SCAN_MODE = shared.scanMode;
     if(shared.filteredTopN) FILTERED_TOP_N = parseInt(shared.filteredTopN, 10);
     // `if(shared.x)` treats a published 0 as "not set" and silently keeps the old value — wrong
@@ -1278,6 +1331,7 @@ async function main(){
     if(shared.defaultTakeProfitPct) DEFAULT_TAKE_PROFIT_PCT = parseFloat(shared.defaultTakeProfitPct);
     if(shared.aiResearchEnabled !== undefined) AI_RESEARCH_ENABLED = !!shared.aiResearchEnabled;
     if(shared.autoTradeEnabled !== undefined) AUTO_TRADE_ENABLED = !!shared.autoTradeEnabled;
+    if(shared.contrarianMode !== undefined) CONTRARIAN_MODE = !!shared.contrarianMode;
     if(shared.maxRecsPerScan) MAX_RECS_PER_SCAN = parseInt(shared.maxRecsPerScan, 10);
   }
   console.log('AI research is ' + (AI_RESEARCH_ENABLED ? 'ENABLED' : 'DISABLED') + ' this run.');
@@ -1498,6 +1552,11 @@ async function main(){
     newRecs.forEach(rec => { rec.conviction = computeConviction(rec, technicals[rec.coin]); });
   } else {
     newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; });
+  }
+
+  if(CONTRARIAN_MODE){
+    newRecs.forEach(rec => applyContrarianFlip(rec));
+    if(newRecs.length) console.log(`Contrarian mode ON — flipped direction on ${newRecs.length} recommendation(s): ` + newRecs.map(r => `${r.coin} ${r.original_direction}→${r.direction}`).join(', '));
   }
 
   // Rank by our own computed confluence score (not the model's self-assessed conviction label).
