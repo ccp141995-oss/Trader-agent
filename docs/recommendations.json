@@ -85,7 +85,7 @@
       "generated_at": "2026-09-03T13:58:08.025Z",
       "expires_at": "2026-09-03T14:28:08.025Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1100,7 +1100,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/0ft5klbbtl.png",
       "telegram_message_id": 1177,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-03T13:58:32.025Z"
     },
     {
       "coin": "ETH",
