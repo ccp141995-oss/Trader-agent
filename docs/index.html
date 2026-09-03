@@ -482,6 +482,14 @@
       When ON, every idea that clears your risk settings below executes automatically after a short window — Telegram gets a Cancel button instead of Confirm/Deny, and you'll still get the idea, the fill status, and any errors, just without a tap required. All of the same caps still apply (max position size, max leverage, max stop distance, max entry deviation, max take-profit distance) — this only removes the human-tap step, nothing else. Start with this OFF until you've watched the confirm-required flow work correctly for a while.
     </div>
 
+    <div class="field checkbox" style="margin-bottom:10px;">
+      <input type="checkbox" id="contrarianMode">
+      <label for="contrarianMode">⚡ Contrarian mode — take the opposite of every recommendation</label>
+    </div>
+    <div class="warn-box" style="border-color:var(--red-dim);color:var(--red);margin-bottom:14px;">
+      When ON, every recommendation's direction is flipped from what the analysis actually concluded — a long becomes a short and vice versa. Stop-loss and take-profit mirror to the correct opposite side of entry, preserving the same distances (and risk/reward ratio) the analysis arrived at, so the flipped trade is still structurally sound. The original thesis, pattern, and confluence score are kept and clearly labeled as the thing being faded, not rewritten to falsely justify the new direction. This is a deliberate bet against the system's own analysis — understand that before turning it on.
+    </div>
+
     <div class="field">
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Scan mode</label>
       <div class="net-toggle">
@@ -520,6 +528,11 @@
       <div class="warn-box" style="margin-top:10px;">
         Ranks every tradeable Hyperliquid perp by 24h volume, drops anything below your OI/volume floors, and scans only the top N that remain. This avoids wasting research calls — and avoids trading — on thin, easily-manipulated markets.
       </div>
+    </div>
+
+    <div class="field" style="margin-top:12px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;">Excluded coins (comma-separated, applies in both watchlist and filtered mode)</label>
+      <input type="text" id="excludedCoinsInput" placeholder="e.g. DOGE,SHIB">
     </div>
 
     <div class="section-label">Trade Agent — Auto-scan &amp; alerts</div>
@@ -675,13 +688,13 @@
   // ---------------- State ----------------
   const LS_KEYS = {
     network:'hlDash_network', address:'hlDash_accountAddress', agentKey:'hlDash_agentKey',
-    anthropicKey:'hlDash_anthropicKey', watchlist:'hlDash_watchlist',
+    anthropicKey:'hlDash_anthropicKey', watchlist:'hlDash_watchlist', excludedCoins:'hlDash_excludedCoins',
     maxPositionPct:'hlDash_maxPositionPct', maxLeverage:'hlDash_maxLeverage',
     defaultTakeProfitPct:'hlDash_defaultTakeProfitPct', maxStopLossPct:'hlDash_maxStopLossPct',
     maxTakeProfitPct:'hlDash_maxTakeProfitPct', maxEntryDeviationPct:'hlDash_maxEntryDeviationPct',
     circuitBreakerDrawdownPct:'hlDash_circuitBreakerDrawdownPct',
     maxRecsPerScan:'hlDash_maxRecsPerScan',
-    autoTradeEnabled:'hlDash_autoTradeEnabled',
+    autoTradeEnabled:'hlDash_autoTradeEnabled', contrarianMode:'hlDash_contrarianMode',
     scanMode:'hlDash_scanMode', filteredTopN:'hlDash_filteredTopN',
     filteredMinOI:'hlDash_filteredMinOI', filteredMinVolume24h:'hlDash_filteredMinVolume24h',
     githubRepo:'hlDash_githubRepo', githubPat:'hlDash_githubPat', autoPublishConfig:'hlDash_autoPublishConfig',
@@ -694,6 +707,7 @@
     agentKey: localStorage.getItem(LS_KEYS.agentKey) || '',
     anthropicKey: localStorage.getItem(LS_KEYS.anthropicKey) || '',
     watchlist: localStorage.getItem(LS_KEYS.watchlist) || 'BTC,ETH,SOL,HYPE',
+    excludedCoins: localStorage.getItem(LS_KEYS.excludedCoins) || '',
     maxPositionPct: parseFloat(localStorage.getItem(LS_KEYS.maxPositionPct)) || 5,
     maxLeverage: parseFloat(localStorage.getItem(LS_KEYS.maxLeverage)) || 3,
     defaultTakeProfitPct: parseFloat(localStorage.getItem(LS_KEYS.defaultTakeProfitPct)) || 3,
@@ -703,6 +717,7 @@
     circuitBreakerDrawdownPct: parseFloat(localStorage.getItem(LS_KEYS.circuitBreakerDrawdownPct)) || 25,
     maxRecsPerScan: parseInt(localStorage.getItem(LS_KEYS.maxRecsPerScan), 10) || 1,
     autoTradeEnabled: localStorage.getItem(LS_KEYS.autoTradeEnabled) === 'true',
+    contrarianMode: localStorage.getItem(LS_KEYS.contrarianMode) === 'true',
     scanMode: localStorage.getItem(LS_KEYS.scanMode) || 'watchlist',
     filteredTopN: parseInt(localStorage.getItem(LS_KEYS.filteredTopN), 10) || 20,
     filteredMinOI: numOrDefault(localStorage.getItem(LS_KEYS.filteredMinOI), 1000000),
@@ -2145,6 +2160,30 @@
     return 'low';
   }
 
+  // Flips a recommendation's direction to the opposite of what the normal analysis concluded.
+  // Stop-loss and take-profit are directionally dependent — a short's stop must sit above entry
+  // and target below, the mirror of a long — so this preserves the original distances from entry
+  // and mirrors them to the opposite side, rather than just relabeling direction and leaving
+  // prices on the wrong side of entry. Matches the backend's identical implementation.
+  function applyContrarianFlip(rec){
+    const originalDirection = rec.direction;
+    const entry = rec.entry_price;
+    const stopDistance = Math.abs(entry - rec.stop_loss_price);
+    const flippedDirection = originalDirection === 'long' ? 'short' : 'long';
+    rec.direction = flippedDirection;
+    rec.stop_loss_price = flippedDirection === 'long' ? entry - stopDistance : entry + stopDistance;
+    if(rec.take_profit_price != null){
+      const targetDistance = Math.abs(entry - rec.take_profit_price);
+      rec.take_profit_price = flippedDirection === 'long' ? entry + targetDistance : entry - targetDistance;
+    }
+    rec.contrarian_mode = true;
+    rec.original_direction = originalDirection;
+    rec.original_rationale = rec.rationale;
+    rec.rationale = `CONTRARIAN: fading a ${originalDirection} signal (score ${rec.confluence_score != null ? rec.confluence_score+'/8' : 'n/a'}). Original thesis: ${rec.rationale}`;
+    rec.risk_flags = (rec.risk_flags || []).concat([`Contrarian mode: taking ${flippedDirection} against the analysis's own ${originalDirection} conclusion.`]);
+    return rec;
+  }
+
   // ---------------- Open interest momentum (tracked across scans via localStorage) ----------------
   function classifyOiMomentum(oiChangePct, priceChangePct){
     if(oiChangePct == null || priceChangePct == null) return null;
@@ -2304,10 +2343,22 @@
 
   async function resolveScanCoins(){
     log('Scan mode: ' + cfg.scanMode + (cfg.scanMode === 'filtered' ? ` (min OI $${cfg.filteredMinOI}, min vol $${cfg.filteredMinVolume24h}, top ${cfg.filteredTopN})` : ` (${cfg.watchlist})`), 'ok');
+    const excluded = (cfg.excludedCoins || '').split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+    // Applies regardless of scan mode — a coin listed here is never examined at all, whether it
+    // would otherwise come from the watchlist or the dynamically-built filtered universe. Kept
+    // separate from just removing it from the watchlist, since that alone wouldn't also block it
+    // from filtered mode.
+    function applyExclusions(coins){
+      if(!excluded.length) return coins;
+      const kept = coins.filter(c => !excluded.includes(c));
+      const dropped = coins.filter(c => excluded.includes(c));
+      if(dropped.length) log('Excluding per configured exclusion list: ' + dropped.join(', '), '');
+      return kept;
+    }
     if(cfg.scanMode === 'filtered'){
       const coins = await loadFilteredUniverse();
       if(!coins.length) log('Filtered universe returned no coins — thresholds may be too strict', 'err');
-      return coins;
+      return applyExclusions(coins);
     }
     // Unlike filtered mode (which only ever sees genuinely perp-listed coins), the watchlist is
     // hand-typed — nothing stops a typo, a delisted symbol, or a spot-only token (Hyperliquid's
@@ -2320,7 +2371,7 @@
     if(invalid.length){
       log(`Watchlist contains symbol(s) with no live Hyperliquid perpetual market — skipping: ${invalid.join(', ')} (check for typos, delistings, or spot-only tokens)`, 'err');
     }
-    return checked.filter(c => c.valid).map(c => c.coin);
+    return applyExclusions(checked.filter(c => c.valid).map(c => c.coin));
   }
 
   async function callAnthropicOnce(system, user){
@@ -2538,6 +2589,11 @@
         newRecs.forEach(rec => { rec.conviction = rec.conviction || 'low'; rec.source = 'manual-fallback'; });
       }
 
+      if(cfg.contrarianMode){
+        newRecs.forEach(rec => applyContrarianFlip(rec));
+        if(newRecs.length) log(`Contrarian mode ON — flipped direction on ${newRecs.length} recommendation(s): ` + newRecs.map(r => `${r.coin} ${r.original_direction}→${r.direction}`).join(', '), 'ok');
+      }
+
       // Rank by our own computed confluence score — always sorted, not just when capping is
       // needed, since with a default cap of 1 most scans have too few candidates to trigger the
       // length check below at all.
@@ -2696,12 +2752,13 @@
       const confluenceTag = r.confluence_score != null ? '<span class="conviction low" style="margin-left:4px;">'+r.confluence_score+'/8 factors</span>' : '';
       const consistencyTag = r.self_consistent ? '<span class="conviction high" style="margin-left:4px;">verified 2x</span>' : '';
       const autoTag = r.auto_trade ? '<span class="conviction medium" style="margin-left:4px;">⚡ auto-trade</span>' : '';
+      const contrarianTag = r.contrarian_mode ? '<span class="conviction medium" style="margin-left:4px;background:var(--red);color:#fff;">⚡ contrarian (was '+r.original_direction+')</span>' : '';
       const est = estimateFundsRequired(r);
       const fundsLine = est ? '<div class="rec-horizon">Cash required: ~$'+est.margin.toFixed(2)+' margin ($'+est.notional.toFixed(2)+' notional)</div>' : '';
       const chartLink = r.hyperliquid_url ? '<div class="rec-horizon"><a href="'+r.hyperliquid_url+'" target="_blank" rel="noopener" style="color:var(--mint);">View '+r.coin+' chart on Hyperliquid ↗</a></div>' : '';
       return '<div class="rec-card">'
         + '<div class="rec-top"><span class="rec-coin">'+r.coin+'<span class="side-tag '+(isLong?'long':'short')+'">'+(isLong?'Long':'Short')+'</span>'
-        + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+confluenceTag+consistencyTag+autoTag+sourceTag+statusBadge+'</span></div>'
+        + '<span class="conviction '+(r.conviction||'low')+'">'+(r.conviction||'low')+'</span>'+confluenceTag+consistencyTag+autoTag+contrarianTag+sourceTag+statusBadge+'</span></div>'
         + '<div class="rec-catalyst"><b>'+(r.pattern||'Pattern n/a')+'</b>'+((r.indicators_confirming&&r.indicators_confirming.length)?' — '+r.indicators_confirming.join(', '):'')+'</div>'
         + '<div class="rec-horizon">'+ (r.time_horizon||'') +' · entry ~$'+fmtNum(r.entry_price,2)+' · stop $'+fmtNum(r.stop_loss_price,2)+(r.generated_at?' · '+fmtRelativeTime(r.generated_at):'')+'</div>'
         + fundsLine
@@ -3289,6 +3346,7 @@
   function buildSharedConfig(){
     return {
       watchlist: cfg.watchlist,
+      excludedCoins: cfg.excludedCoins,
       scanMode: cfg.scanMode,
       filteredTopN: cfg.filteredTopN,
       filteredMinOI: cfg.filteredMinOI,
@@ -3303,6 +3361,7 @@
       maxRecsPerScan: cfg.maxRecsPerScan,
       aiResearchEnabled: cfg.aiResearchEnabled,
       autoTradeEnabled: cfg.autoTradeEnabled,
+      contrarianMode: cfg.contrarianMode,
       updated_at: new Date().toISOString()
     };
   }
@@ -3619,7 +3678,9 @@
       document.getElementById('aiResearchEnabled').checked = cfg.aiResearchEnabled;
       document.getElementById('anthropicKeyInput').value = cfg.anthropicKey;
       document.getElementById('autoTradeEnabled').checked = cfg.autoTradeEnabled;
+      document.getElementById('contrarianMode').checked = cfg.contrarianMode;
       document.getElementById('watchlistInput').value = cfg.watchlist;
+      document.getElementById('excludedCoinsInput').value = cfg.excludedCoins;
       document.getElementById('filteredTopNInput').value = cfg.filteredTopN;
       document.getElementById('filteredMinOiInput').value = cfg.filteredMinOI;
       document.getElementById('filteredMinVolInput').value = cfg.filteredMinVolume24h;
@@ -3652,6 +3713,7 @@
     document.getElementById('publishConfigBtn').addEventListener('click', ()=>{
       // publish whatever is currently typed in the modal, without requiring a full save/connect first
       cfg.watchlist = document.getElementById('watchlistInput').value.trim() || cfg.watchlist;
+      cfg.excludedCoins = document.getElementById('excludedCoinsInput').value.trim();
       cfg.filteredTopN = parseInt(document.getElementById('filteredTopNInput').value, 10) || cfg.filteredTopN;
       cfg.filteredMinOI = numOrDefault(document.getElementById('filteredMinOiInput').value, cfg.filteredMinOI);
       cfg.filteredMinVolume24h = numOrDefault(document.getElementById('filteredMinVolInput').value, cfg.filteredMinVolume24h);
@@ -3665,6 +3727,7 @@
       cfg.maxRecsPerScan = parseInt(document.getElementById('maxRecsPerScanInput').value, 10) || cfg.maxRecsPerScan;
       cfg.aiResearchEnabled = document.getElementById('aiResearchEnabled').checked;
       cfg.autoTradeEnabled = document.getElementById('autoTradeEnabled').checked;
+      cfg.contrarianMode = document.getElementById('contrarianMode').checked;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
       publishConfigToGitHub();
@@ -3678,6 +3741,7 @@
       cfg.aiResearchEnabled = document.getElementById('aiResearchEnabled').checked;
       cfg.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
       cfg.watchlist = document.getElementById('watchlistInput').value.trim() || 'BTC,ETH,SOL,HYPE';
+      cfg.excludedCoins = document.getElementById('excludedCoinsInput').value.trim();
       cfg.filteredTopN = parseInt(document.getElementById('filteredTopNInput').value, 10) || 20;
       cfg.filteredMinOI = numOrDefault(document.getElementById('filteredMinOiInput').value, 1000000);
       cfg.filteredMinVolume24h = numOrDefault(document.getElementById('filteredMinVolInput').value, 2000000);
@@ -3690,6 +3754,7 @@
       cfg.circuitBreakerDrawdownPct = parseFloat(document.getElementById('circuitBreakerDrawdownPctInput').value) || 25;
       cfg.maxRecsPerScan = parseInt(document.getElementById('maxRecsPerScanInput').value, 10) || 1;
       cfg.autoTradeEnabled = document.getElementById('autoTradeEnabled').checked;
+      cfg.contrarianMode = document.getElementById('contrarianMode').checked;
       cfg.githubRepo = document.getElementById('githubRepoInput').value.trim();
       cfg.githubPat = document.getElementById('githubPatInput').value.trim();
       cfg.autoPublishConfig = document.getElementById('autoPublishConfig').checked;
@@ -3711,8 +3776,10 @@
       safeSet(LS_KEYS.agentKey, cfg.agentKey);
       safeSet('hlDash_aiResearchEnabled', cfg.aiResearchEnabled);
       safeSet(LS_KEYS.autoTradeEnabled, cfg.autoTradeEnabled);
+      safeSet(LS_KEYS.contrarianMode, cfg.contrarianMode);
       safeSet(LS_KEYS.anthropicKey, cfg.anthropicKey);
       safeSet(LS_KEYS.watchlist, cfg.watchlist);
+      safeSet(LS_KEYS.excludedCoins, cfg.excludedCoins);
       safeSet(LS_KEYS.scanMode, cfg.scanMode);
       safeSet(LS_KEYS.filteredTopN, cfg.filteredTopN);
       safeSet(LS_KEYS.filteredMinOI, cfg.filteredMinOI);
