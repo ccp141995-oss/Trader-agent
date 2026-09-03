@@ -1,5 +1,6 @@
 {
   "watchlist": "BTC,ETH,SOL,HYPE",
+  "excludedCoins": "FARTCOIN,ZEC",
   "scanMode": "filtered",
   "filteredTopN": 20,
   "filteredMinOI": 1000000,
@@ -14,5 +15,6 @@
   "maxRecsPerScan": 1,
   "aiResearchEnabled": true,
   "autoTradeEnabled": true,
-  "updated_at": "2026-09-01T14:57:21.557Z"
+  "contrarianMode": false,
+  "updated_at": "2026-09-03T03:15:33.706Z"
 }
