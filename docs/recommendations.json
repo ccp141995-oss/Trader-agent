@@ -82,7 +82,7 @@
       "generated_at": "2026-09-03T13:20:52.102Z",
       "expires_at": "2026-09-03T13:50:52.102Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1097,7 +1097,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/ibkfi8zekm.png",
       "telegram_message_id": 1171,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-03T13:21:21.924Z"
     },
     {
       "coin": "PONS",
