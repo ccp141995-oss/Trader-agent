@@ -3,8 +3,8 @@
   "excludedCoins": "FARTCOIN,ZEC",
   "scanMode": "filtered",
   "filteredTopN": 20,
-  "filteredMinOI": 1000000,
-  "filteredMinVolume24h": 1000000,
+  "filteredMinOI": 2000000,
+  "filteredMinVolume24h": 2000000,
   "maxPositionPct": 25,
   "maxLeverage": 10,
   "defaultTakeProfitPct": 50,
@@ -15,6 +15,6 @@
   "maxRecsPerScan": 1,
   "aiResearchEnabled": true,
   "autoTradeEnabled": true,
-  "contrarianMode": true,
-  "updated_at": "2026-09-03T03:17:52.244Z"
+  "contrarianMode": false,
+  "updated_at": "2026-09-03T03:19:18.496Z"
 }
