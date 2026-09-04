@@ -91,7 +91,7 @@
       "generated_at": "2026-09-04T23:27:49.992Z",
       "expires_at": "2026-09-04T23:57:49.992Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1106,7 +1106,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/074f7q3tgp.png",
       "telegram_message_id": 1446,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 10.00% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "HYPE",
@@ -2280,7 +2281,7 @@
       "generated_at": "2026-09-04T22:56:55.380Z",
       "expires_at": "2026-09-04T23:26:55.380Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
