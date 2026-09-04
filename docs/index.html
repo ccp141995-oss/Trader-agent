@@ -400,6 +400,8 @@
       <div class="panel-view" id="view-pnl">
         <div class="agent-scan-bar">
           <button id="refreshPnlBtn">Refresh</button>
+          <button id="exportPnlBtn">Download as Excel</button>
+          <button id="analyzePriceActionBtn">Analyze price action</button>
         </div>
         <div class="agent-meta" id="pnlMeta">Realized P&amp;L from your actual trade fills on Hyperliquid — connect an account to load.</div>
         <div id="pnlSummary"></div>
@@ -2856,6 +2858,66 @@
 
   // ---------------- P&L tab: realized profit/loss from actual Hyperliquid trade fills ----------------
   let pnlChart = null, pnlSeries = null;
+  let lastLoadedFills = []; // populated by renderPnlView, reused by export and price-action analysis
+
+  // ---------------- P&L by signal: best-effort cross-reference of trade fills against recommendation history ----------------
+  // Hyperliquid's fills carry no signal metadata at all — only price, size, and realized P&L.
+  // This matches each closing fill to the most plausible recommendation from the dashboard's own
+  // history (localStorage) by coin, direction, and closest-preceding timestamp. This is a
+  // heuristic, not a guaranteed-correct link: a trade placed manually via the ticket (not from a
+  // recommendation) won't match anything, and if multiple recommendations for the same coin and
+  // direction existed close together, the match could attribute to the wrong one. Surfaced
+  // honestly in the UI rather than presented as certain.
+  function matchFillToHistory(fill, history){
+    const fillDir = fill.dir && fill.dir.toLowerCase().includes('long') ? 'long'
+      : (fill.dir && fill.dir.toLowerCase().includes('short') ? 'short' : null);
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const candidates = history.filter(h => {
+      if(h.coin !== fill.coin) return false;
+      if(fillDir && h.direction !== fillDir) return false;
+      const recTime = new Date(h.recorded_at).getTime();
+      return recTime <= fill.time && (fill.time - recTime) < sevenDaysMs;
+    });
+    if(!candidates.length) return null;
+    candidates.sort((a,b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+    return candidates[0];
+  }
+
+  function computePnlBySignal(closingFills, history){
+    const buckets = { pattern: {}, factor: {}, conviction: {}, source: {} };
+    let matchedCount = 0;
+    function addTo(bucket, key, pnl){
+      if(!bucket[key]) bucket[key] = { totalPnl: 0, count: 0, wins: 0, losses: 0 };
+      bucket[key].totalPnl += pnl;
+      bucket[key].count += 1;
+      if(pnl > 0) bucket[key].wins += 1;
+      else if(pnl < 0) bucket[key].losses += 1;
+    }
+    closingFills.forEach(fill => {
+      const match = matchFillToHistory(fill, history);
+      if(!match) return;
+      matchedCount++;
+      const pnl = parseFloat(fill.closedPnl || '0');
+      (match.pattern || '').split(',').map(p=>p.trim()).filter(Boolean).forEach(p => addTo(buckets.pattern, p, pnl));
+      (match.confluence_factors || []).forEach(f => addTo(buckets.factor, f, pnl));
+      if(match.conviction) addTo(buckets.conviction, match.conviction, pnl);
+      if(match.source) addTo(buckets.source, match.source, pnl);
+    });
+    return { buckets, matchedCount, totalClosing: closingFills.length };
+  }
+
+  function renderSignalTable(bucket, title){
+    const rows = Object.keys(bucket).map(k => ({ key: k, ...bucket[k] }));
+    if(!rows.length) return '';
+    rows.sort((a,b) => b.totalPnl - a.totalPnl);
+    const rowsHtml = rows.map(r => {
+      const color = r.totalPnl > 0 ? 'var(--mint)' : r.totalPnl < 0 ? 'var(--red)' : 'var(--text)';
+      const winRate = (r.wins + r.losses) ? (r.wins / (r.wins + r.losses) * 100).toFixed(0) + '%' : '—';
+      return '<div class="pnl-trade-row"><div>' + r.key + '<div class="pnl-trade-meta">' + r.count + ' trade(s) · ' + winRate + ' win rate</div></div>'
+        + '<div class="pnl-trade-pnl" style="color:' + color + '">' + fmtUsd(r.totalPnl) + '</div></div>';
+    }).join('');
+    return '<div style="margin-top:14px;"><div class="section-label" style="margin-bottom:4px;">' + title + '</div>' + rowsHtml + '</div>';
+  }
 
   async function renderPnlView(){
     const metaEl = document.getElementById('pnlMeta');
@@ -2865,12 +2927,14 @@
       metaEl.textContent = 'Realized P&L from your actual trade fills on Hyperliquid — connect an account to load.';
       listEl.innerHTML = '<div class="empty-state">No account connected.</div>';
       summaryEl.innerHTML = '';
+      lastLoadedFills = [];
       return;
     }
     metaEl.textContent = 'Loading trade history…';
     let fills;
     try{
       fills = await infoPost({ type: 'userFills', user: cfg.address });
+      lastLoadedFills = fills;
     }catch(e){
       metaEl.textContent = 'Could not load trade history: ' + e.message;
       return;
@@ -2901,6 +2965,28 @@
       + '<div class="pnl-stat"><div class="label">Closing trades</div><div class="value">'+closingFills.length+' <span style="font-size:11px;color:var(--muted);font-weight:400;">('+wins+'W / '+losses+'L)</span></div></div>'
       + '<div class="pnl-stat"><div class="label">Total fees paid</div><div class="value">'+fmtUsd(totalFees)+'</div></div>'
       + '</div>';
+
+    // Cross-reference closing trades against this dashboard's own recommendation history to see
+    // which signals correlated with the most (and least) realized P&L. Best-effort only —
+    // Hyperliquid's fills carry no signal metadata, so this matches by coin/direction/timing
+    // against local history, which won't cover manually-placed trades or history that's aged out.
+    const history = loadHistory();
+    const { buckets, matchedCount, totalClosing } = computePnlBySignal(closingFills, history);
+    const signalSections = [
+      renderSignalTable(buckets.pattern, 'P&L by candlestick pattern'),
+      renderSignalTable(buckets.factor, 'P&L by confluence factor'),
+      renderSignalTable(buckets.conviction, 'P&L by conviction level'),
+      renderSignalTable(buckets.source, 'P&L by source (AI-researched vs. technicals-only)')
+    ].filter(Boolean).join('');
+    if(signalSections){
+      summaryEl.innerHTML += '<div style="margin-top:12px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;font-size:11px;color:var(--muted);">'
+        + 'Matched ' + matchedCount + ' of ' + totalClosing + ' closing trades to a recommendation in this dashboard\'s history (coin + direction + closest-preceding timestamp, within 7 days). '
+        + 'Unmatched trades are most likely ones placed manually via the ticket, or from a recommendation that\'s aged out of local history — this breakdown only covers what could actually be matched, not all your trades.'
+        + '</div>' + signalSections;
+    } else if(closingFills.length){
+      summaryEl.innerHTML += '<div style="margin-top:12px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;font-size:11px;color:var(--muted);">No closing trades could be matched to recommendation history yet — this builds up as the dashboard sees more recommendations that lead to closed trades.</div>';
+    }
+
     metaEl.textContent = 'Based on your ' + fills.length + ' most recent fills from Hyperliquid — for full history beyond that depth, use their own SQL Explorer.';
 
     // Cumulative net P&L over time, oldest first, for the chart below.
@@ -2943,16 +3029,142 @@
     // Individual fill list, most recent first — every fill shown (not just closes) so opens are
     // visible for context, but P&L only displays where it's actually non-zero.
     const listSorted = fills.slice().sort((a,b) => b.time - a.time);
-    listEl.innerHTML = listSorted.map(f => {
+    listEl.innerHTML = listSorted.map((f,i) => {
       const pnl = parseFloat(f.closedPnl || '0');
       const fee = parseFloat(f.fee || '0');
       const pnlStr = pnl !== 0 ? (pnl > 0 ? '+' : '') + fmtUsd(pnl) : '—';
-      return '<div class="pnl-trade-row">'
+      return '<div class="pnl-trade-row" data-fill-idx="'+i+'" data-coin="'+f.coin+'" data-time="'+f.time+'" data-px="'+f.px+'" data-dir="'+(f.dir||'')+'" data-pnl="'+pnl+'">'
         + '<div><b>' + f.coin + '</b> ' + (f.dir || (f.side === 'B' ? 'Buy' : 'Sell'))
-        + '<div class="pnl-trade-meta">' + fmtNum(parseFloat(f.sz),4) + ' @ $' + fmtNum(parseFloat(f.px),2) + ' · ' + fmtExactTime(f.time) + ' · fee ' + fmtUsd(fee) + '</div></div>'
+        + '<div class="pnl-trade-meta">' + fmtNum(parseFloat(f.sz),4) + ' @ $' + fmtNum(parseFloat(f.px),2) + ' · ' + fmtExactTime(f.time) + ' · fee ' + fmtUsd(fee) + '</div>'
+        + '<div class="pnl-trade-meta" id="pnl-analysis-'+i+'"></div></div>'
         + '<div class="pnl-trade-pnl" style="color:' + pnlColor(pnl) + '">' + pnlStr + '</div>'
         + '</div>';
     }).join('');
+  }
+
+  // ---------------- Excel export ----------------
+  function exportPnlToExcel(){
+    if(!lastLoadedFills.length){ log('Nothing to export — load trade history first.', 'err'); return; }
+    const rows = lastLoadedFills.slice().sort((a,b) => b.time - a.time).map(f => ({
+      'Date/Time': fmtExactTime(f.time),
+      'Unix Time (ms)': f.time,
+      'Coin': f.coin,
+      'Direction': f.dir || (f.side === 'B' ? 'Buy' : 'Sell'),
+      'Size': parseFloat(f.sz),
+      'Price': parseFloat(f.px),
+      'Realized P&L': parseFloat(f.closedPnl || '0'),
+      'Fee': parseFloat(f.fee || '0'),
+      'Fee Token': f.feeToken || '',
+      'Order ID': f.oid || '',
+      'Trade ID': f.tid || '',
+      'Tx Hash': f.hash || ''
+    }));
+    try{
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Trade History');
+      const filename = 'hyperliquid-trade-history-' + new Date().toISOString().slice(0,10) + '.xlsx';
+      XLSX.writeFile(wb, filename);
+      log('Exported ' + rows.length + ' fills to ' + filename, 'ok');
+    }catch(e){
+      log('Excel export failed: ' + e.message, 'err');
+    }
+  }
+
+  // ---------------- Price-action analysis: max favorable/adverse excursion per trade ----------------
+  // Answers "why did this trade actually work or not" using real historical candles, not
+  // speculation: for each closing trade, finds its corresponding opening fill, fetches candles
+  // spanning the trade's actual duration, and computes how far price moved in the trade's favor
+  // (MFE) and against it (MAE) at any point during that window — not just the net P&L at exit.
+  // A losing trade with a strongly positive MFE means the direction was right and it reversed
+  // before being closed out; a losing trade with MAE close to zero means it was a clean, low-heat
+  // stop-out, not a battle. This is exactly the kind of context raw P&L numbers alone can't show.
+  function findOpeningFill(closingFill, allFills){
+    const candidates = allFills.filter(f =>
+      f.coin === closingFill.coin &&
+      f.dir && f.dir.toLowerCase().includes('open') &&
+      f.time < closingFill.time
+    );
+    if(!candidates.length) return null;
+    candidates.sort((a,b) => b.time - a.time);
+    return candidates[0];
+  }
+
+  function pickCandleInterval(durationMs){
+    const hours = durationMs / 3600000;
+    if(hours <= 6) return '5m';
+    if(hours <= 48) return '15m';
+    if(hours <= 240) return '1h';
+    return '4h';
+  }
+
+  async function computeMfeMae(coin, openTime, closeTime, entryPx, direction){
+    const interval = pickCandleInterval(closeTime - openTime);
+    let candles;
+    try{
+      candles = await infoPost({ type:'candleSnapshot', req:{ coin, interval, startTime: openTime, endTime: closeTime } });
+    }catch(e){ return null; }
+    if(!Array.isArray(candles) || !candles.length) return null;
+
+    let bestPx = entryPx, worstPx = entryPx;
+    candles.forEach(c => {
+      const high = parseFloat(c.h), low = parseFloat(c.l);
+      if(direction === 'long'){
+        if(high > bestPx) bestPx = high;
+        if(low < worstPx) worstPx = low;
+      } else {
+        if(low < bestPx) bestPx = low;
+        if(high > worstPx) worstPx = high;
+      }
+    });
+    const mfePct = direction === 'long' ? (bestPx - entryPx) / entryPx * 100 : (entryPx - bestPx) / entryPx * 100;
+    const maePct = direction === 'long' ? (entryPx - worstPx) / entryPx * 100 : (worstPx - entryPx) / entryPx * 100;
+    return { mfePct, maePct };
+  }
+
+  async function analyzePriceAction(){
+    if(!lastLoadedFills.length){ log('Nothing to analyze — load trade history first.', 'err'); return; }
+    const btn = document.getElementById('analyzePriceActionBtn');
+    btn.disabled = true; btn.textContent = 'Analyzing…';
+
+    const closingFills = lastLoadedFills.filter(f => parseFloat(f.closedPnl || '0') !== 0);
+    // Capped to the most recent 20 to keep this responsive — one candle fetch per trade, and
+    // infoPost already retries on failure, so a large history would otherwise take a while.
+    const toAnalyze = closingFills.slice().sort((a,b) => b.time - a.time).slice(0, 20);
+    log('Analyzing price action for ' + toAnalyze.length + ' most recent closing trade(s) — fetching real candle data per trade…', '');
+
+    let insightPositiveMfeOnLoss = 0, insightHighMaeOnWin = 0, analyzed = 0;
+    const listSorted = lastLoadedFills.slice().sort((a,b) => b.time - a.time);
+
+    for(const fill of toAnalyze){
+      const idx = listSorted.indexOf(fill);
+      const slot = document.getElementById('pnl-analysis-' + idx);
+      const opening = findOpeningFill(fill, lastLoadedFills);
+      if(!opening){
+        if(slot) slot.textContent = 'Could not find opening fill for this trade.';
+        continue;
+      }
+      const direction = opening.dir && opening.dir.toLowerCase().includes('short') ? 'short' : 'long';
+      const entryPx = parseFloat(opening.px);
+      const result = await computeMfeMae(fill.coin, opening.time, fill.time, entryPx, direction);
+      if(!result){
+        if(slot) slot.textContent = 'No candle data available for this window.';
+        continue;
+      }
+      analyzed++;
+      const pnl = parseFloat(fill.closedPnl || '0');
+      if(pnl < 0 && result.mfePct > 0.5) insightPositiveMfeOnLoss++;
+      if(pnl > 0 && result.maePct > 0.5) insightHighMaeOnWin++;
+      if(slot){
+        slot.innerHTML = 'Best: <span style="color:var(--mint)">+' + result.mfePct.toFixed(2) + '%</span> · Worst: <span style="color:var(--red)">-' + result.maePct.toFixed(2) + '%</span> from entry';
+      }
+    }
+
+    btn.disabled = false; btn.textContent = 'Analyze price action';
+    const insights = [];
+    if(insightPositiveMfeOnLoss > 0) insights.push(insightPositiveMfeOnLoss + ' losing trade(s) moved favorably by 0.5%+ before reversing — direction was right, exit/management wasn\'t.');
+    if(insightHighMaeOnWin > 0) insights.push(insightHighMaeOnWin + ' winning trade(s) went 0.5%+ against entry before working out — closer calls than the final P&L alone suggests.');
+    log('Price action analysis complete (' + analyzed + '/' + toAnalyze.length + ' trades, real candle data). ' + (insights.length ? insights.join(' ') : 'No strong patterns in this batch.'), 'ok');
   }
 
   async function pollBackendFeed(){
@@ -3925,6 +4137,8 @@
     });
 
     document.getElementById('refreshPnlBtn').addEventListener('click', ()=> renderPnlView());
+    document.getElementById('exportPnlBtn').addEventListener('click', exportPnlToExcel);
+    document.getElementById('analyzePriceActionBtn').addEventListener('click', analyzePriceAction);
 
     document.getElementById('expandLogBtn').addEventListener('click', ()=>{
       const container = document.getElementById('logContainer');
