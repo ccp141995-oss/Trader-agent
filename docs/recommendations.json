@@ -92,7 +92,7 @@
       "generated_at": "2026-09-04T18:20:43.852Z",
       "expires_at": "2026-09-04T18:50:43.852Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1107,7 +1107,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/sypsgj4vrg.png",
       "telegram_message_id": 1404,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Stop-loss is no longer below current price — thesis looks invalidated"
     },
     {
       "coin": "TAO",
@@ -2270,7 +2271,7 @@
       "generated_at": "2026-09-04T17:43:36.117Z",
       "expires_at": "2026-09-04T18:13:36.117Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
