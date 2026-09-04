@@ -83,7 +83,7 @@
       "generated_at": "2026-09-04T06:28:31.883Z",
       "expires_at": "2026-09-04T06:58:31.883Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1098,7 +1098,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/nrwfpkozkb.png",
       "telegram_message_id": 1307,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Stop-loss is no longer above current price — thesis looks invalidated"
     },
     {
       "coin": "ETH",
@@ -1162,7 +1163,7 @@
       "generated_at": "2026-09-04T05:56:22.674Z",
       "expires_at": "2026-09-04T06:26:22.674Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
