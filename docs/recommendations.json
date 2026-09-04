@@ -86,7 +86,7 @@
       "generated_at": "2026-09-04T01:45:05.673Z",
       "expires_at": "2026-09-04T02:15:05.673Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1101,7 +1101,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/jhf6cskhhl.png",
       "telegram_message_id": 1270,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 5.07% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "XMR",
@@ -2262,7 +2263,7 @@
       "generated_at": "2026-09-04T01:15:24.050Z",
       "expires_at": "2026-09-04T01:45:24.051Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
