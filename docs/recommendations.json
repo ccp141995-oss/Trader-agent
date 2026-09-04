@@ -99,7 +99,7 @@
       "generated_at": "2026-09-04T10:26:32.664Z",
       "expires_at": "2026-09-04T10:56:32.664Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1114,7 +1114,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/i5rvvg72oo.png",
       "telegram_message_id": 1341,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for UNI"
     },
     {
       "coin": "XMR",
@@ -1187,7 +1188,7 @@
       "generated_at": "2026-09-04T09:56:43.955Z",
       "expires_at": "2026-09-04T10:26:43.956Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
