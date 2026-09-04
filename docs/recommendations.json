@@ -81,7 +81,7 @@
       "generated_at": "2026-09-04T02:58:04.960Z",
       "expires_at": "2026-09-04T03:28:04.960Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1096,7 +1096,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/ouncto6ckh.png",
       "telegram_message_id": 1280,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 7.74% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "BTC",
