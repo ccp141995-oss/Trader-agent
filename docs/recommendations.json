@@ -89,7 +89,7 @@
       "generated_at": "2026-09-04T14:58:10.533Z",
       "expires_at": "2026-09-04T15:28:10.534Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1104,7 +1104,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/hmffu6we7a.png",
       "telegram_message_id": 1375,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 57.02% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "XRP",
