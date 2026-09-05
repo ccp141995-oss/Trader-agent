@@ -84,7 +84,7 @@
       "generated_at": "2026-09-05T23:17:28.202Z",
       "expires_at": "2026-09-05T23:47:28.202Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1099,7 +1099,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/xb5wu96ccq.png",
       "telegram_message_id": 1637,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Stop-loss is no longer below current price — thesis looks invalidated"
     },
     {
       "coin": "XMR",
