@@ -88,7 +88,7 @@
       "generated_at": "2026-09-05T05:17:29.415Z",
       "expires_at": "2026-09-05T05:47:29.415Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1103,7 +1103,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/m69iojlhaf.png",
       "telegram_message_id": 1493,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for UNI"
     },
     {
       "coin": "HYPE",
@@ -2267,7 +2268,7 @@
       "generated_at": "2026-09-05T04:43:22.329Z",
       "expires_at": "2026-09-05T05:13:22.329Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
