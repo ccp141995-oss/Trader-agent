@@ -90,7 +90,7 @@
       "generated_at": "2026-09-05T13:17:56.315Z",
       "expires_at": "2026-09-05T13:47:56.315Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1105,7 +1105,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/beo4z8rc9n.png",
       "telegram_message_id": 1560,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-05T13:18:21.479Z"
     },
     {
       "coin": "ARB",
