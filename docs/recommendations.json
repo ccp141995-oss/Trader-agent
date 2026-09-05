@@ -85,7 +85,7 @@
       "generated_at": "2026-09-05T05:57:02.526Z",
       "expires_at": "2026-09-05T06:27:02.527Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1100,7 +1100,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/4dcjbc0ce7.png",
       "telegram_message_id": 1501,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-05T05:57:42.166Z"
     },
     {
       "coin": "HYPE",
