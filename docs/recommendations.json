@@ -83,7 +83,7 @@
       "generated_at": "2026-09-05T17:18:27.831Z",
       "expires_at": "2026-09-05T17:48:27.831Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1098,7 +1098,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/dl3fuxcnp3.png",
       "telegram_message_id": 1589,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Stop-loss is no longer below current price — thesis looks invalidated"
     },
     {
       "coin": "LIT",
