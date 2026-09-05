@@ -96,7 +96,7 @@
       "generated_at": "2026-09-05T00:29:27.520Z",
       "expires_at": "2026-09-05T00:59:27.520Z",
       "source": "backend",
-      "status": "pending",
+      "status": "executed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1111,7 +1111,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/4xjqu9b2hs.png",
       "telegram_message_id": 1454,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "executed_at": "2026-09-05T00:29:58.055Z"
     },
     {
       "coin": "ENA",
@@ -1188,7 +1189,7 @@
       "generated_at": "2026-09-04T23:56:29.011Z",
       "expires_at": "2026-09-05T00:26:29.011Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
@@ -2278,7 +2279,7 @@
       "generated_at": "2026-09-04T23:43:40.481Z",
       "expires_at": "2026-09-05T00:13:40.481Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
