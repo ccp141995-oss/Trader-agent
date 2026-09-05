@@ -89,7 +89,7 @@
       "generated_at": "2026-09-05T08:31:55.416Z",
       "expires_at": "2026-09-05T09:01:55.417Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1104,7 +1104,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/vzx7m8jiu1.png",
       "telegram_message_id": 1523,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 72.93% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "ARB",
