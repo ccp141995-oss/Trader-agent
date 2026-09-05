@@ -2243,7 +2243,7 @@
       "generated_at": "2026-09-05T01:19:43.085Z",
       "expires_at": "2026-09-05T01:49:43.086Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
