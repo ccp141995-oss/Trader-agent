@@ -91,7 +91,7 @@
       "generated_at": "2026-09-05T10:29:40.268Z",
       "expires_at": "2026-09-05T10:59:40.268Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1106,7 +1106,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/0cd7syqy3w.png",
       "telegram_message_id": 1538,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 30.44% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "CASHCAT",
@@ -2279,7 +2280,7 @@
       "generated_at": "2026-09-05T09:56:39.651Z",
       "expires_at": "2026-09-05T10:26:39.651Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
