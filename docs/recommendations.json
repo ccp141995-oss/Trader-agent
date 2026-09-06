@@ -89,7 +89,7 @@
       "generated_at": "2026-09-06T08:20:30.930Z",
       "expires_at": "2026-09-06T08:50:30.930Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1104,7 +1104,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/2k1mcekpci.png",
       "telegram_message_id": 1705,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 58.62% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "ETH",
@@ -2251,7 +2252,7 @@
       "generated_at": "2026-09-06T07:45:46.649Z",
       "expires_at": "2026-09-06T08:15:46.649Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
