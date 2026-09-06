@@ -93,7 +93,7 @@
       "generated_at": "2026-09-06T20:18:55.763Z",
       "expires_at": "2026-09-06T20:48:55.763Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1108,7 +1108,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/r956lz8l8z.png",
       "telegram_message_id": 1804,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 8.78% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "LIT",
@@ -2255,7 +2256,7 @@
       "generated_at": "2026-09-06T19:42:28.543Z",
       "expires_at": "2026-09-06T20:12:28.543Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
