@@ -2259,7 +2259,7 @@
       "generated_at": "2026-09-06T21:29:13.211Z",
       "expires_at": "2026-09-06T21:59:13.211Z",
       "source": "backend",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
