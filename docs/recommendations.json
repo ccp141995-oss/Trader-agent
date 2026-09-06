@@ -94,7 +94,7 @@
       "generated_at": "2026-09-06T10:19:02.733Z",
       "expires_at": "2026-09-06T10:49:02.733Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1109,7 +1109,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/2fopzct4ul.png",
       "telegram_message_id": 1722,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 59.00% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "UNI",
