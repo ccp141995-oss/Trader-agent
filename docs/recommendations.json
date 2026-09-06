@@ -82,7 +82,7 @@
       "generated_at": "2026-09-06T00:34:03.809Z",
       "expires_at": "2026-09-06T01:04:03.809Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1097,7 +1097,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/6b7ftpwuch.png",
       "telegram_message_id": 1645,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for ENA"
     },
     {
       "coin": "ETH",
