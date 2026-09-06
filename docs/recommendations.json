@@ -82,7 +82,7 @@
       "generated_at": "2026-09-06T07:32:56.125Z",
       "expires_at": "2026-09-06T08:02:56.125Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1097,7 +1097,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/nb2jnsvikd.png",
       "telegram_message_id": 1699,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 7.39% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "ETH",
