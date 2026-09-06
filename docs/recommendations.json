@@ -97,7 +97,7 @@
       "generated_at": "2026-09-06T14:56:51.297Z",
       "expires_at": "2026-09-06T15:26:51.297Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1112,7 +1112,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/ucmranqeea.png",
       "telegram_message_id": 1759,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 5.78% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "DOGE",
