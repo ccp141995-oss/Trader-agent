@@ -97,7 +97,7 @@
       "generated_at": "2026-09-07T03:58:37.161Z",
       "expires_at": "2026-09-07T04:28:37.162Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1112,7 +1112,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/9pcnv8nr6y.png",
       "telegram_message_id": 1864,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 5.15% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "BTC",
@@ -1191,7 +1192,7 @@
       "generated_at": "2026-09-07T03:48:27.115Z",
       "expires_at": "2026-09-07T04:18:27.116Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
@@ -2279,7 +2280,7 @@
       "generated_at": "2026-09-07T03:37:24.400Z",
       "expires_at": "2026-09-07T04:07:24.400Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
