@@ -2245,7 +2245,7 @@
       "generated_at": "2026-09-07T13:59:54.453Z",
       "expires_at": "2026-09-07T14:29:54.453Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
@@ -3326,7 +3326,7 @@
       "generated_at": "2026-09-07T13:51:46.521Z",
       "expires_at": "2026-09-07T14:21:46.521Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
