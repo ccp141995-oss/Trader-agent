@@ -15,6 +15,6 @@
   "maxRecsPerScan": 1,
   "aiResearchEnabled": true,
   "autoTradeEnabled": true,
-  "contrarianMode": false,
-  "updated_at": "2026-09-03T15:44:02.701Z"
+  "contrarianMode": true,
+  "updated_at": "2026-09-07T01:00:34.698Z"
 }
