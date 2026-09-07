@@ -3310,7 +3310,7 @@
       "generated_at": "2026-09-07T17:18:11.512Z",
       "expires_at": "2026-09-07T17:48:11.513Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
