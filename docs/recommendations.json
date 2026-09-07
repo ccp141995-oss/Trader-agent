@@ -98,7 +98,7 @@
       "generated_at": "2026-09-07T04:35:31.750Z",
       "expires_at": "2026-09-07T05:05:31.750Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1113,7 +1113,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/fpyv2sz7za.png",
       "telegram_message_id": 1869,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "Price moved 6.85% since the recommendation (>5% max entry deviation) — skipped for safety"
     },
     {
       "coin": "JUP",
