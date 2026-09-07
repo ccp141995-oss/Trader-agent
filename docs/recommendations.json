@@ -107,7 +107,7 @@
       "generated_at": "2026-09-07T05:19:20.264Z",
       "expires_at": "2026-09-07T05:49:20.264Z",
       "source": "backend",
-      "status": "pending",
+      "status": "failed",
       "auto_trade": true,
       "chart_candles": {
         "opens": [
@@ -1122,7 +1122,8 @@
       "chart_image_sent": true,
       "chart_image_path": "charts/42sh84jk5k.png",
       "telegram_message_id": 1875,
-      "telegram_chat_id": "1820130237"
+      "telegram_chat_id": "1820130237",
+      "error": "No live price available for ENA"
     },
     {
       "coin": "LINK",
@@ -2292,7 +2293,7 @@
       "generated_at": "2026-09-07T04:48:04.491Z",
       "expires_at": "2026-09-07T05:18:04.492Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
