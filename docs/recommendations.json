@@ -2249,7 +2249,7 @@
       "generated_at": "2026-09-12T22:45:00.224Z",
       "expires_at": "2026-09-12T23:15:00.224Z",
       "source": "backend-fallback",
-      "status": "pending",
+      "status": "expired",
       "auto_trade": false,
       "chart_candles": {
         "opens": [
